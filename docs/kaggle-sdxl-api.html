@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kaggle 免费生图 API 使用文档</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 860px; margin: 0 auto; padding: 20px 16px 60px;
+         font-size: 18px; line-height: 1.75; color: #222; background: #fafafa; }
+  h1 { font-size: 28px; margin: 10px 0 4px; }
+  h2 { font-size: 23px; margin: 38px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #ff6b35; }
+  h3 { font-size: 20px; margin: 26px 0 8px; }
+  .meta { color: #888; font-size: 15px; margin-bottom: 24px; }
+  .addr { background: #fff3ec; border: 2px solid #ff6b35; border-radius: 10px;
+          padding: 16px; font-size: 19px; word-break: break-all; margin: 16px 0; }
+  .addr a { color: #d94f16; font-weight: bold; }
+  code { background: #eee; padding: 2px 7px; border-radius: 5px; font-size: 16px;
+         font-family: ui-monospace, "SF Mono", Consolas, monospace; word-break: break-all; }
+  pre { background: #1e1e1e; color: #e8e8e8; padding: 18px; border-radius: 10px;
+        overflow-x: auto; font-size: 15px; line-height: 1.6; }
+  pre code { background: none; padding: 0; color: inherit; font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 17px; }
+  th, td { border: 1px solid #ddd; padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { background: #f4f4f4; }
+  .warn { background: #fff8e6; border-left: 5px solid #f0a500; padding: 12px 16px;
+          border-radius: 6px; margin: 16px 0; }
+  .ok { background: #eefbeF; border-left: 5px solid #35a853; padding: 12px 16px;
+        border-radius: 6px; margin: 16px 0; }
+  .step { background: #fff; border: 1px solid #e5e5e5; border-radius: 10px;
+          padding: 16px 18px; margin: 14px 0; }
+  .step b.n { display: inline-block; background: #ff6b35; color: #fff; width: 30px; height: 30px;
+              line-height: 30px; text-align: center; border-radius: 50%; margin-right: 8px; }
+  ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<h1>Kaggle 免费生图 API 使用文档</h1>
+<div class="meta">SDXL-Turbo · 2026-10-13 更新 · v2（文生图 + 图生图）</div>
+
+<h2>当前可用地址</h2>
+<div class="addr">
+  <a href="https://8009eaf5ac77855168.gradio.live">https://8009eaf5ac77855168.gradio.live</a>
+</div>
+<ul>
+  <li><b>有效期</b>：地址依赖 Kaggle 会话在线，会话最长 12 小时。地址挂了找小毛重跑 notebook（约 5 分钟出新地址）。</li>
+  <li><b>GPU 配额</b>：每周 30 小时，已用约 2 小时，剩余约 28 小时。</li>
+  <li><b>速度</b>：4 步出图，T4 上约 7 秒一张 1024×1024。</li>
+</ul>
+
+<div class="warn"><b>提示词必须用英文。</b>中文提示词会被模型直接忽略语义，画出不相干的东西（实测"穿宇航服的猫"画成了和服女孩）。</div>
+
+<h2>网页用法（最简单）</h2>
+<p>打开上面地址，两个页签：</p>
+<ul>
+  <li><b>文生图</b>：填英文提示词，选尺寸，点"生成"。</li>
+  <li><b>图生图（参考图）</b>：上传一张参考图，填英文提示词描述要改成什么，拖"改动强度"滑杆（默认 0.6，越大越不像原图），点"生成"。</li>
+</ul>
+
+<h2>API 用法</h2>
+
+<h3>1. 文生图 <code>/t2i</code>（推荐 gradio_client）</h3>
+<pre><code>pip install gradio_client</code></pre>
+<pre><code>from gradio_client import Client
+
+client = Client("https://8009eaf5ac77855168.gradio.live")  # 换成当前地址
+
+img_path, info = client.predict(
+    prompt="a cat astronaut floating in space, digital art",
+    width=1024,      # 512 / 768 / 1024
+    height=1024,     # 512 / 768 / 1024
+    seed=-1,         # -1 = 随机；填固定数字可复现
+    api_name="/t2i",
+)
+print(img_path)  # 生成图已下载到本地的路径
+print(info)      # 如 seed=777</code></pre>
+
+<h3>2. 图生图 <code>/i2i</code>（重点：gradio_client 传图有 bug，请用 REST）</h3>
+
+<div class="warn"><b>为什么不用 gradio_client 传图？</b>实测 gradio_client 2.7.2 传本地图片文件有 bug：传字符串路径时文件根本没上传、服务端报"需要图片数据"；传 Path 对象直接报"不可序列化"。这是客户端库的问题，服务端接口本身是好的。所以图生图走下面三步 REST 调用。</div>
+
+<div class="step"><b><span class="n">1</span>上传参考图，拿到服务端路径</b>
+<pre><code>import requests
+
+base = "https://8009eaf5ac77855168.gradio.live"  # 换成当前地址
+
+with open("ref.jpg", "rb") as f:
+    up_path = requests.post(
+        base + "/gradio_api/upload",
+        files={"files": ("ref.jpg", f, "image/jpeg")},
+        timeout=60,
+    ).json()[0]
+print(up_path)  # 如 /tmp/gradio/xxxx/ref.jpg</code></pre>
+</div>
+
+<div class="step"><b><span class="n">2</span>发起图生图任务，拿到事件 ID</b>
+<pre><code>event_id = requests.post(
+    base + "/gradio_api/call/i2i",
+    json={"data": [
+        {"path": up_path},              # 第 1 步拿到的路径
+        "turn the cat orange",          # 英文提示词：描述要改成什么
+        0.6,                            # 改动强度 0.1~1.0，越大越不像原图
+        -1,                             # seed，-1 = 随机
+    ]},
+    timeout=60,
+).json()["event_id"]</code></pre>
+</div>
+
+<div class="step"><b><span class="n">3</span>等结果（SSE 流），拿到生成图下载地址</b>
+<pre><code>import json
+
+r = requests.get(f"{base}/gradio_api/call/i2i/{event_id}",
+                 stream=True, timeout=300)
+for line in r.iter_lines():
+    if line.startswith(b"data: "):
+        out = json.loads(line[6:])
+        # out = [图片信息, "seed=777 strength=0.6"]
+        print("下载地址：", out[0]["url"])
+        print("信息：", out[1])
+        break
+
+# 把图下到本地
+img = requests.get(out[0]["url"], timeout=60).content
+open("result.webp", "wb").write(img)</code></pre>
+</div>
+
+<div class="ok"><b>实测通过</b>：参考图（宇航员猫）+ "the cat is now an orange tabby cat" + 强度 0.6 → 生成橘猫宇航员，约 8 秒。</div>
+
+<h3>参数说明</h3>
+<table>
+  <tr><th>参数</th><th>说明</th></tr>
+  <tr><td><code>prompt</code></td><td>英文提示词。文生图：描述画面；图生图：描述"要改成什么"。</td></tr>
+  <tr><td><code>strength</code></td><td>仅图生图。0.1～1.0，改动强度；0.6 是常用值。越小越接近原图，越大越放飞。</td></tr>
+  <tr><td><code>seed</code></td><td>随机种子。-1 每次随机；固定数字可复现同一张图。</td></tr>
+  <tr><td><code>width / height</code></td><td>仅文生图。512 / 768 / 1024 三档；图生图固定输出 1024×1024。</td></tr>
+</table>
+
+<h2>画质与适用边界</h2>
+<ul>
+  <li>SDXL-Turbo 是"速度换画质"的蒸馏版：中等偏上，4 步出图。</li>
+  <li>舒适区：卡通、粗线条、大色块（比如 1k 贴纸图）完全够用。</li>
+  <li>短板：细节偏肉、画不出文字、复杂构图容易崩。</li>
+  <li>要更精细：以后可上 SDXL 完整版或 Flux（待定二期）。</li>
+</ul>
+
+<h2>地址失效怎么办</h2>
+<p>Kaggle 会话最长 12 小时，闲置约 20 分钟也可能被回收。地址打不开时找小毛，我重跑 notebook 约 5 分钟给你新地址。notebook 本体：<a href="https://www.kaggle.com/code/larson5588/notebook7ea7910540">notebook7ea7910540</a>。</p>
+
+</body>
+</html>
