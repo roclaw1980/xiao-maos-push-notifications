@@ -84,7 +84,7 @@
 
 <div class="cfg">
   <label style="margin-top:0">API 地址（Kaggle 重启后会变，在此更新）</label>
-  <input type="text" id="api-base" value="https://a1534ce7c813ddc6be.gradio.live">
+  <input type="text" id="api-base" value="https://8c7c05eabdc4936c98.gradio.live">
 </div>
 
 <script>
@@ -176,14 +176,18 @@ async function genI2I() {
   setBtn('i2i-btn', true, '生成中…');
   const t0 = Date.now();
   try {
-    setStatus('第 1 步：上传参考图…');
-    const fd = new FormData(); fd.append('files', file, file.name);
-    const up = await (await fetch(`${base()}/gradio_api/upload`, { method: 'POST', body: fd })).json();
+    setStatus('第 1 步：读取参考图…');
+    // 直接转 base64 data URL，不走 /upload（Gradio 6.30 文件上传有 bug）
+    const dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(file);
+    });
     setStatus('第 2 步：提交图生图任务…');
     const r = await fetch(`${base()}/gradio_api/call/i2i`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      // i2i 现在接收纯路径字符串（gr.Textbox），直接传 upload 返回的路径
-      body: JSON.stringify({ data: [up[0], prompt, strength, seed] })
+      body: JSON.stringify({ data: [dataUrl, prompt, strength, seed] })
     });
     const { event_id } = await r.json();
     setStatus('第 3 步：T4 生成中…');
