@@ -84,7 +84,7 @@
 
 <div class="cfg">
   <label style="margin-top:0">API 地址（Kaggle 重启后会变，在此更新）</label>
-  <input type="text" id="api-base" value="https://662782bb0ee13418f4.gradio.live">
+  <input type="text" id="api-base" value="https://723a9404eb52e301e0.gradio.live">
 </div>
 
 <script>
@@ -106,7 +106,7 @@ function prevImg(input) {
     r.readAsDataURL(f); }
 }
 
-// SSE：等任务完成，返回 data 数组
+// SSE：等任务完成，返回 data 数组（Gradio 协议：等 process_completed 消息）
 async function waitEvent(endpoint, eventId) {
   const resp = await fetch(`${base()}/gradio_api/call/${endpoint}/${eventId}`);
   const reader = resp.body.getReader();
@@ -119,8 +119,16 @@ async function waitEvent(endpoint, eventId) {
     const lines = buf.split('\n'); buf = lines.pop();
     for (const line of lines) {
       if (line.startsWith('data: ')) {
-        const out = JSON.parse(line.slice(6));
-        if (out !== null) return out;
+        let msg;
+        try { msg = JSON.parse(line.slice(6)); } catch (e) { continue; }
+        if (msg === null) continue;
+        if (msg.msg === 'process_completed') {
+          if (!msg.success) throw new Error('服务端生成失败');
+          return msg.output.data;
+        }
+        if (msg.msg === 'queue_full' || msg.msg === 'unexpected_error')
+          throw new Error(msg.msg);
+        // 其他中间消息（estimation / process_starts / progress）忽略，继续等
       }
     }
   }
