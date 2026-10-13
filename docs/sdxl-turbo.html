@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<title>SDXL-Turbo 生图</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0; padding: 16px; background: #fafaf8; color: #222;
+         font-size: 18px; line-height: 1.6; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 15px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab { flex: 1; padding: 14px; text-align: center; font-size: 19px;
+         border: 2px solid #ddd; border-radius: 12px; background: #fff; cursor: pointer; }
+  .tab.active { border-color: #FF6B35; color: #FF6B35; font-weight: bold; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  label { display: block; margin: 14px 0 6px; font-weight: bold; font-size: 17px; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ddd;
+    border-radius: 12px; background: #fff; }
+  textarea { min-height: 90px; resize: vertical; }
+  input[type=range] { width: 100%; height: 40px; }
+  input[type=file] { font-size: 16px; padding: 10px 0; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  button.go { width: 100%; margin-top: 18px; padding: 16px; font-size: 20px; font-weight: bold;
+    color: #fff; background: #FF6B35; border: none; border-radius: 12px; cursor: pointer; }
+  button.go:disabled { background: #ccc; cursor: wait; }
+  #status { margin-top: 14px; font-size: 16px; color: #666; min-height: 24px; }
+  #result img { width: 100%; border-radius: 12px; margin-top: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+  #result .meta { font-size: 15px; color: #888; margin-top: 6px; }
+  .cfg { margin-top: 22px; padding: 12px; background: #f0f0ee; border-radius: 10px; font-size: 14px; }
+  .cfg input { font-size: 14px; padding: 8px; }
+  .tip { font-size: 14px; color: #999; margin-top: 4px; }
+  #preview { max-width: 100%; border-radius: 12px; margin-top: 8px; display: none; }
+</style>
+</head>
+<body>
+<h1>🎨 SDXL-Turbo 生图</h1>
+<div class="sub">T4 上约 2 秒一张 · 提示词请用英文</div>
+
+<div class="tabs">
+  <div class="tab active" id="tab-t2i" onclick="showTab('t2i')">文生图</div>
+  <div class="tab" id="tab-i2i" onclick="showTab('i2i')">图生图</div>
+</div>
+
+<div class="panel active" id="panel-t2i">
+  <label>英文提示词</label>
+  <textarea id="t2i-prompt" placeholder="a cute cat sticker, die cut, white background"></textarea>
+  <div class="row">
+    <div><label>尺寸</label>
+      <select id="t2i-size">
+        <option value="512">512 × 512</option>
+        <option value="768">768 × 768</option>
+        <option value="1024" selected>1024 × 1024</option>
+      </select></div>
+    <div><label>种子（-1 随机）</label>
+      <input type="number" id="t2i-seed" value="-1"></div>
+  </div>
+  <button class="go" id="t2i-btn" onclick="genT2I()">生成</button>
+</div>
+
+<div class="panel" id="panel-i2i">
+  <label>参考图</label>
+  <input type="file" id="i2i-file" accept="image/*" onchange="prevImg(this)">
+  <img id="preview" alt="">
+  <label>英文提示词（描述要改成什么）</label>
+  <textarea id="i2i-prompt" placeholder="turn the cat orange"></textarea>
+  <label>改动强度：<span id="str-val">0.6</span></label>
+  <input type="range" id="i2i-strength" min="0.1" max="1" step="0.05" value="0.6"
+         oninput="document.getElementById('str-val').textContent=this.value">
+  <div class="tip">越小越接近原图，越大越放飞，0.6 是常用值</div>
+  <label>种子（-1 随机）</label>
+  <input type="number" id="i2i-seed" value="-1">
+  <button class="go" id="i2i-btn" onclick="genI2I()">生成</button>
+</div>
+
+<div id="status"></div>
+<div id="result"></div>
+
+<div class="cfg">
+  <label style="margin-top:0">API 地址（Kaggle 重启后会变，在此更新）</label>
+  <input type="text" id="api-base" value="https://c8192f7290e409beda.gradio.live">
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const base = () => $('api-base').value.replace(/\/$/, '');
+function setStatus(t) { $('status').textContent = t; }
+function setBtn(id, dis, txt) { const b = $(id); b.disabled = dis; if (txt) b.textContent = txt; }
+
+function showTab(which) {
+  ['t2i','i2i'].forEach(k => {
+    $('tab-'+k).classList.toggle('active', k === which);
+    $('panel-'+k).classList.toggle('active', k === which);
+  });
+}
+function prevImg(input) {
+  const f = input.files[0];
+  if (f) { const r = new FileReader();
+    r.onload = e => { $('preview').src = e.target.result; $('preview').style.display = 'block'; };
+    r.readAsDataURL(f); }
+}
+
+// SSE：等任务完成，返回 data 数组
+async function waitEvent(endpoint, eventId) {
+  const resp = await fetch(`${base()}/gradio_api/call/${endpoint}/${eventId}`);
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const out = JSON.parse(line.slice(6));
+        if (out !== null) return out;
+      }
+    }
+  }
+  throw new Error('任务无返回');
+}
+
+function showResult(url, meta) {
+  $('result').innerHTML =
+    `<img src="${url}" alt="生成结果"><div class="meta">${meta || ''}</div>
+     <div class="tip">长按图片可保存</div>`;
+}
+
+async function genT2I() {
+  const prompt = $('t2i-prompt').value.trim();
+  if (!prompt) { setStatus('请先填提示词'); return; }
+  const size = parseInt($('t2i-size').value);
+  const seed = parseInt($('t2i-seed').value || '-1');
+  setBtn('t2i-btn', true, '生成中…'); setStatus('已提交，T4 生成中…');
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${base()}/gradio_api/call/t2i`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [prompt, size, size, seed] })
+    });
+    const { event_id } = await r.json();
+    const out = await waitEvent('t2i', event_id);
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    showResult(out[0].url, `${out[1] || ''} · 用时 ${secs} 秒`);
+    setStatus('完成');
+  } catch (e) { setStatus('失败：' + e.message + '（地址可能已失效，找小毛要新地址）'); }
+  setBtn('t2i-btn', false, '生成');
+}
+
+async function genI2I() {
+  const file = $('i2i-file').files[0];
+  const prompt = $('i2i-prompt').value.trim();
+  if (!file) { setStatus('请先选参考图'); return; }
+  if (!prompt) { setStatus('请先填提示词'); return; }
+  const strength = parseFloat($('i2i-strength').value);
+  const seed = parseInt($('i2i-seed').value || '-1');
+  setBtn('i2i-btn', true, '生成中…');
+  const t0 = Date.now();
+  try {
+    setStatus('第 1 步：上传参考图…');
+    const fd = new FormData(); fd.append('files', file, file.name);
+    const up = await (await fetch(`${base()}/gradio_api/upload`, { method: 'POST', body: fd })).json();
+    setStatus('第 2 步：提交图生图任务…');
+    const r = await fetch(`${base()}/gradio_api/call/i2i`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [{ path: up[0] }, prompt, strength, seed] })
+    });
+    const { event_id } = await r.json();
+    setStatus('第 3 步：T4 生成中…');
+    const out = await waitEvent('i2i', event_id);
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    showResult(out[0].url, `${out[1] || ''} · 用时 ${secs} 秒`);
+    setStatus('完成');
+  } catch (e) { setStatus('失败：' + e.message + '（地址可能已失效，找小毛要新地址）'); }
+  setBtn('i2i-btn', false, '生成');
+}
+</script>
+</body>
+</html>
