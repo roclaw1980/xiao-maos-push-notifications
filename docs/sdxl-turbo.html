@@ -106,7 +106,8 @@ function prevImg(input) {
     r.readAsDataURL(f); }
 }
 
-// SSE：等任务完成，返回 data 数组（Gradio 协议：等 process_completed 消息）
+// SSE：等任务完成，返回 data 数组
+// 兼容两种格式：Gradio 6.x 直接返回数组；旧版包在 process_completed 里
 async function waitEvent(endpoint, eventId) {
   const resp = await fetch(`${base()}/gradio_api/call/${endpoint}/${eventId}`);
   const reader = resp.body.getReader();
@@ -121,14 +122,17 @@ async function waitEvent(endpoint, eventId) {
       if (line.startsWith('data: ')) {
         let msg;
         try { msg = JSON.parse(line.slice(6)); } catch (e) { continue; }
-        if (msg === null) continue;
-        if (msg.msg === 'process_completed') {
+        if (msg === null || msg === undefined) continue;
+        if (Array.isArray(msg)) return msg;                    // Gradio 6.x：直接数组
+        if (typeof msg !== 'object') continue;
+        if (msg.error) throw new Error(msg.error);             // 服务端报错
+        if (msg.msg === 'process_completed') {                 // 旧版信封格式
           if (!msg.success) throw new Error('服务端生成失败');
           return msg.output.data;
         }
         if (msg.msg === 'queue_full' || msg.msg === 'unexpected_error')
           throw new Error(msg.msg);
-        // 其他中间消息（estimation / process_starts / progress）忽略，继续等
+        // 其他中间消息（estimation / progress）忽略，继续等
       }
     }
   }
