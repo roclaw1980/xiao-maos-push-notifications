@@ -84,7 +84,7 @@
 
 <div class="cfg">
   <label style="margin-top:0">API 地址（Kaggle 重启后会变，在此更新）</label>
-  <input type="text" id="api-base" value="https://723a9404eb52e301e0.gradio.live">
+  <input type="text" id="api-base" value="https://a86e9352d4958ac80d.gradio.live">
 </div>
 
 <script>
@@ -182,7 +182,8 @@ async function genI2I() {
     setStatus('第 2 步：提交图生图任务…');
     const r = await fetch(`${base()}/gradio_api/call/i2i`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: [{ path: up[0] }, prompt, strength, seed] })
+      // gr.File 输入：直接传上传返回的路径字符串
+      body: JSON.stringify({ data: [up[0], prompt, strength, seed] })
     });
     const { event_id } = await r.json();
     setStatus('第 3 步：T4 生成中…');
