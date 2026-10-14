@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<title>RVC 歌声转换</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0; padding: 16px; background: #fafaf8; color: #222;
+         font-size: 18px; line-height: 1.6; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 15px; margin-bottom: 16px; }
+  label { display: block; margin: 14px 0 6px; font-weight: bold; font-size: 17px; }
+  textarea, input[type=text], input[type=number] {
+    width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ddd;
+    border-radius: 12px; background: #fff; }
+  input[type=file] { font-size: 16px; padding: 10px 0; }
+  input[type=range] { width: 100%; height: 40px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  button.go { width: 100%; margin-top: 18px; padding: 16px; font-size: 20px; font-weight: bold;
+    color: #fff; background: #7c3aed; border: none; border-radius: 12px; cursor: pointer; }
+  button.go:disabled { background: #ccc; cursor: wait; }
+  #status { margin-top: 14px; font-size: 16px; color: #666; min-height: 24px; }
+  #result audio { width: 100%; margin-top: 12px; }
+  #result .meta { font-size: 15px; color: #888; margin-top: 6px; white-space: pre-wrap; }
+  #result .dl { display: inline-block; margin-top: 10px; font-size: 17px; color: #7c3aed; }
+  .cfg { margin-top: 22px; padding: 12px; background: #f0f0ee; border-radius: 10px; font-size: 14px; }
+  .cfg input { font-size: 14px; padding: 8px; }
+  .tip { font-size: 14px; color: #999; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>🎤 RVC 歌声转换</h1>
+<div class="sub">Kaggle T4 推理 · 上传干声 → 换成目标音色</div>
+
+<label>源音频（干声 wav/mp3/m4a）</label>
+<input type="file" id="audio-file" accept="audio/*">
+<div class="tip">建议：人声干声，无伴奏，16kHz 以上</div>
+
+<label>音色模型文件名</label>
+<input type="text" id="model-name" value="rogue.pth">
+<div class="tip">你自己的模型训好后，把 .pth 文件名填到这里</div>
+
+<div class="row">
+  <div><label>变调（半音）</label>
+    <input type="number" id="f0-key" value="0" step="1"></div>
+  <div><label>检索特征比 <span id="idx-val">0.75</span></label>
+    <input type="range" id="index-rate" min="0" max="1" step="0.05" value="0.75"
+           oninput="document.getElementById('idx-val').textContent=this.value"></div>
+</div>
+<div class="tip">变调：男女声互转时调 ±12；检索特征比越高越像目标音色，但太高会失真</div>
+
+<button class="go" id="go-btn" onclick="convert()">开始转换</button>
+
+<div id="status"></div>
+<div id="result"></div>
+
+<div class="cfg">
+  <label style="margin-top:0">API 地址（Kaggle 重启后会变，在此更新）</label>
+  <input type="text" id="api-base" value="https://24d13748511c31553a.gradio.live">
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const base = () => $('api-base').value.replace(/\/$/, '');
+function setStatus(t) { $('status').textContent = t; }
+function setBtn(dis, txt) { const b = $('go-btn'); b.disabled = dis; if (txt) b.textContent = txt; }
+
+// SSE：等任务完成，返回 data 数组
+// 兼容格式：event: complete + data: [音频base64, 信息]；旧版 process_completed 信封
+async function waitEvent(eventId) {
+  const resp = await fetch(`${base()}/gradio_api/call/convert/${eventId}`);
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const chunks = buf.split('\n\n'); buf = chunks.pop();
+    for (const chunk of chunks) {
+      let payload = '';
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('data:')) payload += line.slice(5).trim();
+      }
+      if (!payload) continue;
+      let msg;
+      try { msg = JSON.parse(payload); } catch (e) { continue; }
+      if (msg === null || msg === undefined) continue;
+      if (Array.isArray(msg)) return msg;                 // event: complete 直接数组
+      if (typeof msg !== 'object') continue;
+      if (msg.error) throw new Error(msg.error);
+      if (msg.msg === 'process_completed') {
+        if (!msg.success) throw new Error('服务端转换失败');
+        return msg.output.data;
+      }
+      if (msg.msg === 'queue_full' || msg.msg === 'unexpected_error')
+        throw new Error(msg.msg);
+    }
+  }
+  throw new Error('任务无返回');
+}
+
+async function convert() {
+  const file = $('audio-file').files[0];
+  if (!file) { setStatus('请先选源音频'); return; }
+  const model = $('model-name').value.trim() || 'rogue.pth';
+  const key = parseInt($('f0-key').value || '0');
+  const idx = parseFloat($('index-rate').value);
+  setBtn(true, '转换中…');
+  const t0 = Date.now();
+  try {
+    setStatus('第 1 步：读取音频…');
+    const dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(file);
+    });
+    setStatus('第 2 步：提交转换任务…');
+    const r = await fetch(`${base()}/gradio_api/call/convert`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [dataUrl, model, key, idx] })
+    });
+    const { event_id } = await r.json();
+    setStatus('第 3 步：T4 转换中（约 20 秒）…');
+    const out = await waitEvent(event_id);
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    const audioUrl = out[0];
+    $('result').innerHTML =
+      `<audio controls src="${audioUrl}"></audio>` +
+      `<div><a class="dl" href="${audioUrl}" download="rvc_output.wav">⬇ 下载转换后音频</a></div>` +
+      `<div class="meta">${(out[1] || '').replace(/\\n/g, '\n')} · 用时 ${secs} 秒</div>`;
+    setStatus('完成');
+  } catch (e) { setStatus('失败：' + e.message + '（地址可能已失效，找小毛要新地址）'); }
+  setBtn(false, '开始转换');
+}
+</script>
+</body>
+</html>
