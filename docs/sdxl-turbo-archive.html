@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>SDXL-Turbo 生图方案归档</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:#fafaf8; color:#1a1a1a; margin:0; padding:24px 18px 60px; font-size:17px; line-height:1.75; }
+  .wrap { max-width:720px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .sub { color:#666; font-size:14px; margin-bottom:28px; }
+  h2 { font-size:20px; margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid #FF6B35; }
+  .badge { display:inline-block; background:#eee; color:#555; font-size:13px; padding:2px 10px; border-radius:12px; margin-bottom:12px; }
+  .badge.stop { background:#fde8e8; color:#b91c1c; }
+  table { width:100%; border-collapse:collapse; font-size:15px; margin:10px 0; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #e5e5e5; vertical-align:top; }
+  th { background:#f3f3f1; white-space:nowrap; }
+  code { background:#f0ede8; padding:1px 6px; border-radius:4px; font-size:14px; word-break:break-all; }
+  .note { background:#fff7ed; border-left:4px solid #FF6B35; padding:10px 14px; margin:14px 0; font-size:15px; }
+  ul { padding-left:22px; } li { margin-bottom:6px; }
+  a { color:#c2410c; }
+  .foot { margin-top:40px; color:#999; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SDXL-Turbo 生图方案归档</h1>
+  <div class="sub">归档日期 2026-10-14 ｜ 项目周期 2026-10-13（一日）</div>
+  <span class="badge stop">已停用（用户 2026-10-13 23:06 指令停掉）</span>
+
+  <h2>项目简介</h2>
+  <p>在 Kaggle 免费 GPU（T4）上部署 <b>SDXL-Turbo</b> 文生图/图生图服务，通过 Gradio 公网 API 对外提供，配手机可用的极简前端页。4 步推理，T4 上约 2～3 秒/张。曾作为生图主力方案，2026-10-13 晚用户决定停掉，相关经验转入 RVC 音频方向。</p>
+
+  <h2>最终形态（停用前）</h2>
+  <table>
+    <tr><th>项</th><th>说明</th></tr>
+    <tr><td>模型</td><td>stabilityai/sdxl-turbo，fp16，4 步推理</td></tr>
+    <tr><td>部署</td><td>Kaggle notebook（GPU T4 x2）+ Gradio share 公网地址</td></tr>
+    <tr><td>文生图 API</td><td><code>POST /gradio_api/call/t2i</code>，参数 [prompt, width, height, seed]</td></tr>
+    <tr><td>图生图 API</td><td><code>POST /gradio_api/call/i2i</code>，参数 [base64 data URL, prompt, strength, seed]</td></tr>
+    <tr><td>前端页</td><td><a href="https://roclaw1980.github.io/xiao-maos-push-notifications/docs/sdxl-turbo.html">sdxl-turbo.html</a>（文生图/图生图双页签，大字号手机友好；后端已失效）</td></tr>
+    <tr><td>最后可用地址</td><td><code>https://8c7c05eabdc4936c98.gradio.live</code>（随 Kaggle 会话失效）</td></tr>
+  </table>
+
+  <h2>关键技术结论（留给后人）</h2>
+  <ul>
+    <li><b>VAE dtype 坑（torch 2.11+）</b>："Input type (Half) and bias type (float)" 报错。修复：每次推理前把 VAE 参数逐个对齐到 fp16（<code>_fix_vae_dtype()</code> 写进 t2i/i2i 函数开头，单次修复不 sticky）。</li>
+    <li><b>Gradio 6.30 文件组件 bug</b>：<code>gr.Image</code> / <code>gr.File</code> 经 API 传入后服务端产生空张量（"cannot reshape tensor of 0 elements"），官方 gradio_client 也一样。绕开方案：图片输入改 <code>gr.Textbox</code> 传 <b>base64 data URL</b>，函数内直接解码，不经过文件系统。</li>
+    <li><b>前端直传</b>：自建 HTML 页用 FileReader 把用户选图转 data URL 直传，不走 <code>/upload</code>；绕开被墙的 AWS CDN（Gradio 默认前端在国内打不开）。</li>
+    <li><b>t2i 返回图实际是 WebP</b>（文件名带 .png），下载处理时先验真实格式。</li>
+    <li><b>未解边角问题</b>：t2i 生成的图再做 i2i 会报空张量错（转真 PNG/JPEG 仍失败，原因未明）；用户传真机照片 i2i 正常。</li>
+    <li><b>会话生存规律</b>：免费 T4 无 40 分钟硬上限，是高峰期抢占——北京时间凌晨（美东下午）易被回收，上午（美东深夜）稳定；长任务排北京时间上午。</li>
+    <li><b>依赖</b>：<code>pip install -q --upgrade diffusers gradio</code> + <code>transformers accelerate</code>，卸载预装旧 torchao；实测 torch 2.11.0+cu128、diffusers 0.41.0、gradio 6.30.0。</li>
+  </ul>
+
+  <h2>二期（Qwen-Image-Edit-2509，已弃用）</h2>
+  <p>ComfyUI headless + GGUF 量化路线，三图贴纸还原实测跑通（57.9 分钟，英文拼写全对）。用户 2026-10-13 14:15 决定弃用。技术档案见 <code>Qwen-Image-Edit-2509-二期Runbook.md</code>。</p>
+
+  <h2>文件位置</h2>
+  <table>
+    <tr><th>文件</th><th>说明</th></tr>
+    <tr><td><code>~/workspace/kaggle-sdxl/SDXL-Turbo-Kaggle.ipynb</code></td><td>本地 notebook（线上改动未完全同步）</td></tr>
+    <tr><td><code>~/workspace/kaggle-sdxl/Kaggle-SDXL-部署Runbook-v2.md</code></td><td>部署 Runbook v2.1（含 VAE 修复与 SSE 兼容）</td></tr>
+    <tr><td><code>~/workspace/kaggle-sdxl/Qwen-Image-Edit-2509-二期Runbook.md</code></td><td>二期 Runbook</td></tr>
+    <tr><td><code>docs/sdxl-turbo.html</code>（GitHub Pages）</td><td>手机前端页（后端已死，仅留档）</td></tr>
+    <tr><td><code>docs/kaggle-sdxl-api.html</code>（GitHub Pages）</td><td>API 文档</td></tr>
+  </table>
+
+  <div class="note">停用原因：2026-10-13 晚用户原话"别整了，停下来这个项目"。Kaggle 会话当时已自然死亡，无需手动停止。项目经验（Gradio 文件 bug 绕行、VAE 修复、会话生存规律）已沉淀，供后续 Kaggle 音频项目（RVC）复用。</div>
+
+  <div class="foot">归档人：小毛 ｜ 此文档为项目留存，不再更新</div>
+</div>
+</body>
+</html>
