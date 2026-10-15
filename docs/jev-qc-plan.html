@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贴纸质检系统部署方案（Windows 本机）</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#fafafa;color:#222;line-height:1.9;padding:20px 16px 60px;max-width:760px;margin:0 auto;font-size:19px}
+h1{font-size:30px;margin:10px 0 6px}
+h2{font-size:24px;margin:34px 0 10px;padding-top:18px;border-top:2px solid #eee}
+h3{font-size:21px;margin:20px 0 8px}
+p,li{margin:8px 0}
+ul,ol{padding-left:26px}
+code{background:#f0f0f0;padding:2px 8px;border-radius:6px;font-size:17px;word-break:break-all}
+pre{background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:10px;overflow-x:auto;font-size:16px;line-height:1.7;margin:12px 0}
+pre code{background:none;color:inherit;padding:0}
+.note{background:#fff8e6;border-left:5px solid #f5a623;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+.ok{background:#eef9ee;border-left:5px solid #4caf50;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+.warn{background:#fdeeee;border-left:5px solid #e53935;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+.step{background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:16px;margin:12px 0}
+.step b{font-size:20px}
+.meta{color:#888;font-size:16px;margin-bottom:20px}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:18px}
+th,td{border:1px solid #ddd;padding:10px;text-align:left}
+th{background:#f5f5f5}
+</style>
+</head>
+<body>
+<h1>贴纸质检系统部署方案</h1>
+<p class="meta">Windows 本机版 · 2026-10-15 · 小毛大管家</p>
+
+<h2>一、这套东西是干嘛的</h2>
+<p>上传两张图——<b>素材图</b>（标准）和<b>成品图</b>（待检），系统做两层检查：</p>
+<ul>
+<li><b>OpenCV（本地免费）</b>：把两张图对齐，算相似度，框出差异区域。它是"尺子"，给确定数字。</li>
+<li><b>Jev 1.14（云端 API，要 key）</b>：判断有没有瑕疵、瑕疵分哪类、质量打 1–5 分、框出瑕疵位置。它是"裁判"，做语义判断。</li>
+</ul>
+<div class="ok">分工一句话：OpenCV 找"哪里不一样"，Jev 判断"这个不一样算不算瑕疵"。比如模切毛边是正常工艺，印刷重影才是瑕疵——机器分不清的，Jev 能分。</div>
+
+<h2>二、要准备什么</h2>
+<ul>
+<li>Windows 电脑一台，<b>CPU 就行，不用显卡</b></li>
+<li>Python 3.12（去 python.org 官网下，安装时勾选 <code>Add python.exe to PATH</code>）</li>
+<li>Jev API key（去 typesafe.ai 后台拿，你之前申请过，找一下）</li>
+<li>代码包 <code>jev-qc-win.zip</code>（已发你 Telegram）</li>
+</ul>
+
+<h2>三、安装步骤</h2>
+<div class="step"><b>第 1 步：装 Python</b><p>官网下载 3.12 安装包，一路下一步，记得勾选 Add to PATH。装完打开 cmd 输入 <code>python --version</code>，显示版本号就是好了。</p></div>
+<div class="step"><b>第 2 步：装依赖库</b><p>打开 cmd，执行：</p><pre><code>pip install opencv-python scikit-image pillow requests gradio</code></pre><p>大概下载 200MB，几分钟。</p></div>
+<div class="step"><b>第 3 步：解压代码包</b><p>把 <code>jev-qc-win.zip</code> 解压到比如 <code>D:\jev-qc</code>，里面有 5 个文件：compare.py、jev.py、app.py、start.bat、README.txt。</p></div>
+<div class="step"><b>第 4 步：填 key</b><p>右键编辑 <code>start.bat</code>，把 <code>你的key填这里</code> 换成你的 Jev API key，保存。</p></div>
+
+<h2>四、运行</h2>
+<p>双击 <code>start.bat</code>，等几秒，浏览器打开 <code>http://127.0.0.1:7860</code>，页面出来就是成功了。</p>
+<p>测试：左边传素材图，右边传成品图，点"开始质检"。</p>
+<div class="note">想在手机上测：把 app.py 里 <code>share=True</code> 保持不动，启动后控制台会给一个 <code>https://xxxx.gradio.live</code> 公网地址，手机浏览器打开就能用。</div>
+
+<h2>五、怎么看结果</h2>
+<table>
+<tr><th>指标</th><th>含义</th></tr>
+<tr><td>SSIM 相似度</td><td>越接近 1 越像。同一张图对自己是 1.0</td></tr>
+<tr><td>严重差异像素占比</td><td>差异大的像素占全图的比例，超过 0.5% 就值得看一眼</td></tr>
+<tr><td>差异区域（红框图）</td><td>OpenCV 框出的差异位置</td></tr>
+<tr><td>Jev：瑕疵概率</td><td>成品图有印刷瑕疵的概率</td></tr>
+<tr><td>Jev：瑕疵分类</td><td>无瑕疵 / 污点 / 划痕 / 缺墨 / 色差 / 错位</td></tr>
+<tr><td>Jev：质量打分</td><td>1–5 分，1=无法出货，5=完全一致</td></tr>
+<tr><td>Jev：瑕疵框</td><td>模型认为瑕疵在图里的位置</td></tr>
+</table>
+
+<h2>六、费用</h2>
+<ul>
+<li>OpenCV：免费，本地跑</li>
+<li>Jev：$0.042 / 百万 token，一张图几厘钱，一百张几毛钱</li>
+</ul>
+
+<h2>七、注意事项</h2>
+<div class="warn"><b>先验证再进管线。</b>Jev 的图像和 box 功能是实验性的（官方原话"还没达到生产标准"），box 没有"找不到"这个答案——图没问题时它也可能硬框一个。建议先拿 20 张已知良品 + 20 张已知瑕疵品跑一轮，看准不准再决定。</div>
+<ul>
+<li>Jev 接口是按官方文档写的，还没拿真实 key 跑过。第一次跑如果报错，把错误信息原文发我，我来修。</li>
+<li>拍成品图时尽量跟素材图同角度、同光线，减少误报。</li>
+<li>代码里 0.5% 的阈值可以根据你的实际情况调，compare.py 里改 <code>bad_ratio</code> 的判断。</li>
+</ul>
+</body>
+</html>
