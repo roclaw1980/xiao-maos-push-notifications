@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen-Image 2.1 实测复核与建议 — 2026-10-21</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 19px; line-height: 1.75; color: #1a1a1a; max-width: 860px; margin: 0 auto; padding: 24px 18px 60px; background: #fffdf8; }
+  h1 { font-size: 30px; line-height: 1.35; margin: 10px 0 6px; }
+  h2 { font-size: 24px; margin: 38px 0 10px; border-left: 6px solid #FF6B35; padding-left: 12px; }
+  h3 { font-size: 21px; margin: 26px 0 8px; }
+  .sub { color: #666; font-size: 16px; margin-bottom: 18px; }
+  .key { background: #fff3e8; border: 1px solid #ffb98a; border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+  .key b { color: #c2410c; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 17px; }
+  th, td { border: 1px solid #ddd; padding: 7px 10px; text-align: left; }
+  th { background: #f3efe8; }
+  td.num, th.num { text-align: right; }
+  .good { color: #15803d; font-weight: 700; }
+  .bad { color: #b91c1c; font-weight: 700; }
+  .mid { color: #b45309; font-weight: 700; }
+  code { background: #f1ede4; padding: 1px 6px; border-radius: 5px; font-size: 16px; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 6px 0; }
+  .small { font-size: 15.5px; color: #555; }
+  .rec { background: #eef7ee; border: 1px solid #9ccc9c; border-radius: 10px; padding: 12px 18px; margin: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>Qwen-Image 2.1 实测复核与建议</h1>
+<div class="sub">2026-10-21 · 小毛大管家（搜索 + 上机实测）<br>
+复核对象：《Qwen-Image 2.1 自建算力出图 —— 测速与归因报告》（下称「原报告」）<br>
+环境：同一台 AutoDL A100-40GB 实例、同一商品（OnlyFires 贴纸）、同一组 5 张参考图、用户原提示语，ComfyUI 0.42.0 / torch 2.14.1 / bf16 Turbo 权重</div>
+
+<div class="key">
+<b>一句话结论：原报告测出的 57 秒里，藏着一个模板参数问题。</b><br>
+实例上官方 Turbo <b>编辑</b>模板自带的 <code>CFGGuider</code> 是 <b>cfg = 8</b>，但 ComfyUI 官方文档写明 Turbo 的发布路径是 <b>cfg = 1</b>（cfg 1 时负向条件整段跳过）。我逐项实测：只改这一个数，生产单张从 <b>57.2 秒 → 36.9 秒</b>；用户最初抱怨的<b>绿色斑点和背景渐变同时消失</b>（像素级统计：背景标准差 18.7 → 0.6，绿色异常像素 261 → 0）。原报告悬而未决的「25 秒首步」也定位完毕：就是 KV 前缀缓存的构建，被 cfg 8 构建了两遍。
+</div>
+
+<h2>一、我的实测（E1–E9）</h2>
+<p>方法与原报告对齐：生产口径 = 模型已热 + 参考图全新（每轮换新文件名并重编码图片，强制绕开节点缓存）；种子固定或随机分别标注；耗时取 ComfyUI 日志的 <code>Prompt executed in</code> 与进度条分段。</p>
+
+<table>
+<tr><th>编号</th><th>配置（其余同官方模板）</th><th class="num">总耗时（生产冷）</th><th class="num">Model Initializing</th><th class="num">8 步采样</th><th>背景质量</th></tr>
+<tr><td>E1</td><td>cfg 8（＝模板原样复现）</td><td class="num">58.5s</td><td class="num">27s</td><td class="num">13s</td><td class="bad">渐变+绿斑</td></tr>
+<tr><td>E6</td><td><b>cfg 1</b></td><td class="num"><b>36.9s</b></td><td class="num">12s</td><td class="num">6s</td><td class="good">纯净</td></tr>
+<tr><td>E8</td><td>cfg 1（重复验证）</td><td class="num">37.1s</td><td class="num">12s</td><td class="num">6s</td><td class="good">纯净</td></tr>
+<tr><td>E7b</td><td>cfg 1 + 只用 3 张参考图</td><td class="num"><b>15.9s</b></td><td class="num">~1s</td><td class="num">5s</td><td class="good">纯净*</td></tr>
+<tr><td>E9</td><td>cfg 1 + Texture-Fix VAE</td><td class="num">37.9s</td><td class="num">12s</td><td class="num">6s</td><td class="good">纯净+</td></tr>
+<tr><td>E3</td><td>cfg 1 + 缓存节点 device=off</td><td class="num">26.4s（编码热）</td><td class="num">1s</td><td class="num">~25s</td><td class="good">与 E2 像素全等</td></tr>
+</table>
+<p class="small">* E7b 背景同样纯净，但贴纸在画面中明显更小、构图变弱（见第三节）。E2 为 cfg 1 编码热跑（21.4s），仅作分段参考，不入生产口径——原报告「坑 1」的节点缓存，我第一轮也踩了一次，靠 E6/E8 的冷跑数字为准。</p>
+
+<h3>成本结构（cfg 1、5 张参考图、生产冷）</h3>
+<table>
+<tr><th>环节</th><th class="num">耗时</th><th>说明</th></tr>
+<tr><td>VLM 文本编码（5 张参考图）</td><td class="num">~18s</td><td>约 3.5s/张，与原报告一致</td></tr>
+<tr><td>KV 前缀缓存构建（Model Initializing）</td><td class="num">12s</td><td>cfg 8 时构建两遍 = 27s</td></tr>
+<tr><td>8 步采样</td><td class="num">6s</td><td>cfg 8 时每步双倍计算 = 13s</td></tr>
+<tr><td>VAE 解码 + 存图</td><td class="num">~1s</td><td></td></tr>
+<tr><td><b>合计</b></td><td class="num"><b>~37s</b></td><td>原官方配置 57.2s</td></tr>
+</table>
+
+<h2>二、三个病根的最终判定</h2>
+
+<h3>1. 「25 秒首步」＝ KV 前缀缓存构建（原报告 §10 待办 1，已定位）</h3>
+<p>官方文档对 <code>QwenImage21Cache</code> 节点的说明：它把「文本 + 参考图前缀」的 KV 缓存保存在采样步之间复用。实测证据链：</p>
+<ul>
+<li>进度条把这段时间单独标为 <code>Model Initializing</code>，发生在第 1 步之前；</li>
+<li>cfg 8 → 27s，cfg 1 → 12s：<b>正好约 2 倍</b>，因为 cfg&gt;1 时正、负两个条件分支各建一份前缀缓存；</li>
+<li>把缓存节点设为 <code>device=off</code>：Initializing 降到 1s，但每步采样从 0.75s 涨到 ~3.1s（每步重算前缀），且<b>输出与开缓存时像素级完全一致</b>（平均差 0.0）——缓存只影响速度、不影响结果，机理坐实；</li>
+<li>与参考图张数<b>非线性</b>：3 张时构建只要 ~1s，5 张跳到 12s（原报告的线性拟合是在 cfg 8 下做的，掩盖了这一点）。疑似与缓存体积跨过某个显存/分块阈值有关，未再深挖——不影响结论。</li>
+</ul>
+<p>⇒ 不是原报告候选的 aimdo host_buffer 问题，也不是显卡问题；这是该编辑架构的固有成本，只能靠<b>降 cfg、减参考图</b>削减，换卡只能等比例压缩。</p>
+
+<h3>2. 绿斑 + 背景渐变 ＝ cfg 8 的过度引导伪影（原报告 §8，已定案）</h3>
+<p>同一商品、同一提示语、种子可比条件下做背景像素统计（取画面四边条带）：</p>
+<table>
+<tr><th></th><th>cfg 8（E1）</th><th>cfg 1（E2/E6/E8）</th></tr>
+<tr><td>背景 RGB 标准差</td><td class="bad">18.7 / 12.8 / 4.0</td><td class="good">0.6 / 0.6 / 0.6</td></tr>
+<tr><td>左上角 vs 右下角底色</td><td class="bad">(76,34,0) vs (122,66,8)，明显晕影</td><td class="good">(111,71,39) vs (110,72,39)，一致</td></tr>
+<tr><td>绿色异常像素数</td><td class="bad">261</td><td class="good">0</td></tr>
+</table>
+<p>机理与官方文档互证：文档明确写高 cfg 会「偏移曝光、cfg 5 画质严重下降」，而 Turbo 的发布路径就是 cfg 1。原报告此前把绿斑怀疑到量化精度和 VAE 上——bf16 只减轻了一点，正是因为病根不在那里。<b>结论：绿斑不需要换 VAE、不需要换 Base 模型，改 cfg 即可。</b></p>
+<p>Texture-Fix VAE（madebyollin，官方文档亦推荐）我下载并实测了：背景高频微纹理噪声 0.49 → 0.30（约降 40%），底色与纯净度与原 VAE 无异。它治的是照片类细节图的棋盘格微纹理，对贴纸这种平涂图是小改进——<b>零成本（同体积、同速度），建议顺手换上，但别指望它治绿斑。</b>文件已放在实例 <code>models/vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors</code>。</p>
+
+<h3>3. 主图案阴影 ＝ 模型先验，生成侧无解，走后处理</h3>
+<p>阴影在全部配置下纹丝不动：int8/bf16、cfg 8/1、两种 VAE、3/5 张参考图——我这轮再次全量确认。它是语义层面的东西：所有参考照片里贴纸都贴在车身上，模型默认「贴纸下面该有影子」。提示语已写明无阴影，cfg 1 下又没有负向提示可用，继续在生成参数上死磕收益为零。</p>
+<p><b>生产解法：放到后处理。</b>cfg 1 的背景已是标准差 0.5 的近完美纯色，抠图门槛极低：按底色距离分割（或 BiRefNet 一类抠图模型）提取贴纸 → 合成到目标纯色（或直接导出透明底 PNG），阴影和底色偏差一并清零，底色还能保证与上架规格分毫不差。这一步顺便把「背景必须精确为某个色值」也变成确定性操作，不再靠生成运气。</p>
+
+<h2>三、成本重估（61,833 个商品）</h2>
+<table>
+<tr><th>口径</th><th class="num">单张</th><th class="num">总 GPU 时</th><th class="num">单卡天数</th><th class="num">A100 按需约 ¥3.45/h</th></tr>
+<tr><td>官方模板原样（cfg 8，5 图）</td><td class="num">57.2s</td><td class="num">~933 h</td><td class="num">38.9 天</td><td class="num">~¥3,220</td></tr>
+<tr><td><b>cfg 1，5 图（推荐定稿口径）</b></td><td class="num"><b>37s</b></td><td class="num"><b>~636 h</b></td><td class="num"><b>26.5 天</b></td><td class="num"><b>~¥2,190</b></td></tr>
+<tr><td>cfg 1，3 图（快速档）</td><td class="num">16s</td><td class="num">~274 h</td><td class="num">11.4 天</td><td class="num">~¥950</td></tr>
+</table>
+<p>3 图档的代价在质量侧：我实测的这张，贴纸在画面中的占比明显变小、构图发散（细节像素变少），文字虽对，但作为定稿风险高于 5 图档。建议只用于预筛/草稿，定稿保持 5 图。多卡并行不改变总成本，只压缩日历时间，按需取舍。</p>
+
+<h2>四、建议清单（按优先级）</h2>
+
+<div class="rec"><b>1. 批量管线里把 cfg 写死为 1</b>，其余参数照官方模板（8 步、ManualSigmas 原样、euler）。这是本轮唯一需要改的参数，速度和质量同时受益。附带一条：文字特别密集的商品，建议抽 2–3 个样本对比 cfg 1 与 cfg 2（官方文档说 cfg 2 对小字、数字的跟随更好，但会略微过锐）——本商品的文字在 cfg 1 下完全正确，所以只作抽测，不作默认。</div>
+
+<div class="rec"><b>2. 参考图保持 5 张出定稿</b>；3 张只作快速预筛。原报告「减到 2 张文字崩」的现象大概率也混着 cfg 8 的伪影，但 3 张的构图退化是我亲眼所见，别为省时间赌定稿质量。</div>
+
+<div class="rec"><b>3. VAE 换 Texture-Fix 版</b>（已下载到实例，可直接选用）：微纹理噪声降约 40%，零代价。照片类商品图收益会比贴纸更明显。</div>
+
+<div class="rec"><b>4. 阴影与底色交给后处理</b>：生成（cfg 1）→ 抠图 → 合成标准底色/透明底 → 质检。不要在提示语和参数上继续纠缠阴影。</div>
+
+<div class="rec"><b>5. 机器去留：A100 先留着，另花约 3 元做一次 5090 对照。</b>本轮证明瓶颈主要是软件参数而非显卡；但官方文档给的 5090 编辑速度约 0.3 s/it（1MP），对比这台 A100 在 cfg 1 下约 0.75 s/it，Blackwell 对编码与前缀构建也应有等比例收益——租 1 小时 5090（包月口径约 ¥2.44/h、按需约 ¥2.4–3.6/h）用同一套 cfg 1 参数跑同商品对照，即可定全量跑批用哪张卡。预期 5090 单张可到 15–20 秒级，总成本再降一截，但以实测为准。注意：实例磁盘只剩 12G，若要下 Base 模型（约 14G），先删 int8 Turbo 权重（7.2G）腾地方。</div>
+
+<div class="rec"><b>6. 可以结案的悬案</b>：原报告 §10 的待办 1（25 秒机理）已定位（本报告第二节 1）；待办 3（resolution 512→768 陡崖）未复测，生产用 1024 不受影响，优先级最低；Base 模型（待办 2）在 cfg 1 结论出来后已无必要为「治绿斑」而下，仅当想要更高画质上限时再考虑。</div>
+
+<h2>五、方法与产物</h2>
+<ul>
+<li>测试脚本：实例 <code>/tmp/mt.py</code>（克隆历史工作流改参数提交 /prompt，从日志解析分段耗时）；本地副本与全部产物图在 <code>~/workspace/qwen-test/</code>，实例输出为 <code>output/mt_e*</code> 系列。</li>
+<li>对照图：E1（cfg 8）与 E2（cfg 1）的差异肉眼可见——前者背景有晕影和绿色亮斑，后者为均匀纯棕。</li>
+<li>资料来源：ComfyUI 官方教程《Qwen-Image-2.1 ComfyUI Native Workflow Example》（2026-10-18 更新，含 Sampler/KV cache/VAE 章节）；madebyollin/texture-fix-vae-for-qwen-image-2.1 模型卡；实例上 templates 包 0.11.89 的模板 JSON 本体（CFGGuider=8 为实测值）。</li>
+<li>权限说明：本轮仅在实例上新增了参考图副本（ux_/uy_/uz_ 前缀）、测试输出与 Texture-Fix VAE 文件，未改动原有工作流与模型，未动 ComfyUI 进程参数。</li>
+</ul>
+
+</body>
+</html>
