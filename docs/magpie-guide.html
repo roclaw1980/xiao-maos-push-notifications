@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magpie 安装使用文档</title>
+<style>
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:19px;line-height:1.75;color:#1a1a1a;max-width:760px;margin:0 auto;padding:20px 18px 60px;background:#fff}
+h1{font-size:30px;line-height:1.35;margin:8px 0 4px}
+h2{font-size:23px;margin:38px 0 10px;padding-top:18px;border-top:2px solid #ff6b35}
+h3{font-size:20px;margin:26px 0 8px}
+p{margin:10px 0}
+.subtitle{color:#555;font-size:17px}
+.note{background:#fff7f0;border-left:4px solid #ff6b35;padding:12px 14px;margin:16px 0;font-size:17px}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:16px;background:#f4f4f4;padding:2px 6px;border-radius:4px;word-break:break-all}
+pre{background:#111;color:#eee;padding:14px;border-radius:8px;overflow-x:auto;font-size:15.5px;line-height:1.6}
+pre code{background:none;color:#eee;padding:0}
+table{border-collapse:collapse;width:100%;font-size:17px;margin:12px 0}
+th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+ul,ol{margin:8px 0;padding-left:24px}
+li{margin:6px 0}
+a{color:#c2410c}
+.toc{background:#fafafa;border:1px solid #eee;border-radius:8px;padding:14px 18px;font-size:17px}
+.toc a{text-decoration:none;color:#333}
+.small{color:#666;font-size:16px}
+</style>
+</head>
+<body>
+<h1>Magpie 安装使用文档</h1>
+<p class="subtitle">本地智能网关：一个网关，任意 Agent 用任意模型。<br>作者 yetone，MIT 开源，Go 编写。整理于 2026-10-25，内容以官网与仓库当前版本为准，版本号更新很快，不以本文为准。</p>
+
+<div class="note"><b>先分清同名项目：</b>本文只讲 <b>yetone/magpie</b>（AI 编程 Agent 的模型网关）。不要与 openraven 的云安全 Magpie、Pavics 的 Magpie 等同名项目混淆。</div>
+
+<div class="toc">
+<b>目录</b><br>
+1. Magpie 是什么 &nbsp; 2. 核心概念 &nbsp; 3. 安装 &nbsp; 4. 启动与常驻<br>
+5. 添加供应商 &nbsp; 6. 给 Agent 选模型 &nbsp; 7. 手动接入网关<br>
+8. 路由组 &nbsp; 9. 隐私脱敏 &nbsp; 10. 插件与中间件<br>
+11. 用量、成本与上下文 &nbsp; 12. 共享与多机 &nbsp; 13. 常见问题 &nbsp; 14. 命令速查
+</div>
+
+<h2>1. Magpie 是什么</h2>
+<p>每个 AI 编程 Agent 都把模型写在自己的配置文件里，用自己的格式、自己的 key、自己的 base URL。你付费的订阅只能在一个 Agent 里用，换个工具就得重新折腾。</p>
+<p>Magpie 在中间放一个应用和一个本地网关，解决两件事：</p>
+<ul>
+<li><b>一个地方选模型：</b>菜单栏里列出本机装好的每个 Agent 各自在用什么模型，点一下就能换，Magpie 只改写该 Agent 配置里需要的那一项。</li>
+<li><b>一个网关翻译协议：</b>网关跑在本机 <code>127.0.0.1:3425</code>，同时说 OpenAI Chat、OpenAI Responses、Anthropic Messages、Google Gemini 四种 API，并在两个方向上互相转换，流式输出、工具调用和推理过程都不落下。于是 Claude Code 能跑 DeepSeek，Codex 能跑 Kimi，Gemini CLI 能跑 GLM，OpenCode 能跑你的 Claude 订阅。</li>
+</ul>
+<p>数据流是这样的：你的 Agent → 本机网关 <code>127.0.0.1:3425</code> → 路由组 / 插件 → 你加的供应商（订阅、API key、本机模型）。提示词、回复、key、账号只发给你用的供应商，Magpie 自己在链路里没有服务器。</p>
+<p>支持 macOS（已签名公证）、Windows、Linux，形态有菜单栏应用、窗口、TUI、网页 UI、CLI，还能跑 Docker 和 Termux。Windows 构建目前未签名。</p>
+
+<h2>2. 核心概念</h2>
+<table>
+<tr><th>概念</th><th>含义</th></tr>
+<tr><td>供应商 Providers</td><td>模型从哪里来：登录的订阅、贴 key 的厂商、本机模型。每个模型写作 <code>供应商/模型</code>，例如 <code>deepseek/deepseek-chat</code>。</td></tr>
+<tr><td>Agent</td><td>用模型的工具：Claude Code、Codex、Gemini CLI、OpenCode 等。Agents 页每行一个，显示它当前用的模型。</td></tr>
+<tr><td>网关 Gateway</td><td>本机 <code>127.0.0.1:3425</code>，所有 Agent 被指向这里；它把请求发给真正提供该模型的供应商，并做协议翻译。</td></tr>
+<tr><td>路由组 Routing groups</td><td>几个模型或账号合成一个名字 <code>group/&lt;id&gt;</code>，Agent 选它就等于选了一组，额度用完自动切下一个。</td></tr>
+<tr><td>Profile</td><td>所有 Agent 的整套配置快照，起个名字（如“省钱”“专注”），一键全切过去。</td></tr>
+</table>
+
+<h2>3. 安装</h2>
+<h3>3.1 一键安装（推荐）</h3>
+<pre><code>curl -fsSL https://usemagpie.ai/install.sh | sh</code></pre>
+<p>安装器把 <code>magpie</code> 命令放到 <code>~/.local/bin</code>，应用放到该放的地方（Mac 是 /Applications，Linux 是应用菜单）。Mac 构建已签名公证，所有构建都会自己更新，新版本下载后在重启时装好。</p>
+<p>也可以去官网下载安装包，或者：</p>
+<pre><code>go install github.com/yetone/magpie@latest</code></pre>
+<p>Windows 上 <code>magpie.exe</code> 的命令完全一样；另有纯终端构建 <code>magpie-cli-windows-amd64.exe</code>，在最新 release 里下载。</p>
+<h3>3.2 Docker（服务器 / NAS）</h3>
+<p>镜像 <code>ghcr.io/yetone/magpie</code>，支持 linux/amd64 和 linux/arm64。网关端口 3425，浏览器 UI 端口 3430。跑在 NAS 上可以给局域网内所有机器提供网关。</p>
+<h3>3.3 在防火墙后面安装 / 更新</h3>
+<p>国内网络或没有 GitHub 访问时，给安装器和更新命令加代理或镜像：</p>
+<pre><code>curl -fsSL https://usemagpie.ai/install.sh | sh -s -- --proxy http://127.0.0.1:7890
+magpie update --proxy socks5://127.0.0.1:1080</code></pre>
+<p>支持 http、https、socks5、socks5h，也认 <code>HTTPS_PROXY</code> 和 <code>ALL_PROXY</code> 环境变量。<code>--mirror &lt;前缀&gt;</code> 让它从你选的 GitHub 下载镜像站取发布文件，<code>magpie update mirror &lt;前缀&gt;</code> 可把镜像固定给每次更新，<code>magpie update mirror off</code> 取消。注意：不给镜像就不用镜像；文件的 SHA-256 永远来自 usemagpie.ai，镜像改过的文件会被拒绝。应用自身的更新走 Settings → Proxy。</p>
+
+<h2>4. 启动与常驻</h2>
+<p>走 Magpie 的模型要求 Magpie 在运行：网关是跟着应用一起跑的。</p>
+<ul>
+<li>关掉窗口后它还留在菜单栏 / 托盘里继续跑；<code>magpie tray</code> 只启动菜单栏图标，可以把它放进登录项。</li>
+<li><code>magpie serve</code> 只跑网关，不要界面。</li>
+<li><code>magpie daemon install</code> 把它装成系统服务（Linux 用 systemd，Mac 用 launchd），从登录或开机起一直跑，不用开窗口；<code>magpie daemon install --web</code> 还会同时提供浏览器页面，<code>magpie daemon status</code> 打印页面链接。</li>
+<li>Agent 用它自己的模型和自己的登录时，不走 Magpie，也就不需要 Magpie 在运行。</li>
+</ul>
+<p>网关地址默认 <code>127.0.0.1:3425</code>，可用环境变量 <code>MAGPIE_ADDR</code> 改。</p>
+
+<h2>5. 添加供应商</h2>
+<p>打开 Magpie → Providers → ＋ Add provider，选一个 tile，或者输入厂商名搜索。加一次就够了，之后所有 Agent 都能用。</p>
+<h3>5.1 订阅：登录，不用 key</h3>
+<p>Claude（Pro、Max、Team）、ChatGPT（Plus、Pro、Business）、Cursor、Grok（SuperGrok）、Copilot、Devin。点 tile 后在浏览器里走厂商自己的登录页（Copilot 会在 GitHub 页面上给一个码去输入），登录完成账号就出现。订阅是在 Magpie 里添加的，不是在某个 Agent 里登录。</p>
+<ul>
+<li>一个供应商可以加多个账号：再点一次 Claude 或 ChatGPT 的 tile 就能加第二个，每个账号单独列出，一键切换在用哪一个。</li>
+<li>本机某个 Agent 里已经登录的账号也会作为供应商出现，显示“signed in as …”。</li>
+<li>订阅的模型会以 <code>claude/…</code>、<code>codex/…</code>、<code>copilot/…</code> 的名字出现在所有 Agent 的选择器里。注意：Claude 订阅的请求是经由本机装好的 Claude Code 驱动的，所以要保持 Claude Code 已安装。</li>
+</ul>
+<h3>5.2 厂商：贴 API key</h3>
+<p>Anthropic、OpenAI、Google Gemini、Google Vertex AI、Amazon Bedrock、DeepSeek、Kimi、智谱 GLM、MiniMax、StepFun、Qwen、百度千帆、腾讯云、华为云 MaaS、火山引擎 Ark、Mistral、Groq、Nous、xAI、OpenRouter、Together、Fireworks、硅基流动、NVIDIA NIM、ModelScope 等。选一个，粘贴 key（Get a key 会链到厂商的 key 申请页），保存。Magpie 会去厂商那里问它提供哪些模型并列出来；点开供应商那一行可以挑哪些模型让 Agent 看到，或者点 Test 测试。</p>
+<h3>5.3 本机模型</h3>
+<p>Ollama、LM Studio，不用 key。</p>
+<h3>5.4 自定义：任意兼容地址</h3>
+<p>给名字、一个 OpenAI 兼容的 base URL（以 <code>/v1</code> 结尾）、一个 Anthropic 兼容的地址（就是 <code>ANTHROPIC_BASE_URL</code> 会填的根地址），或者两者都给，再加 key。把这个接口会说的每种 API 都给全；每个 Agent 用它原生会说的那种，剩下的由 Magpie 翻译。</p>
+<h3>5.5 从已有配置导入</h3>
+<p>Add provider 表格顶部的 Import 会读 Claude Code 的 <code>settings.json</code> 和 Codex 的 <code>config.toml</code>，不改动这两个文件，把你勾选的供应商带过来。另外还支持从 CC Switch、Alma 导入。注意：导入过来的是副本，之后在 Agent 设置里的改动不会再同步过来。</p>
+<p>Key 存在 <code>~/.config/magpie/providers.json</code>，仅你自己可读。Magpie 不从 shell 环境变量里读 key：你加了什么，它就用什么。</p>
+<div class="note"><b>默认会读你的登录文件：</b>Magpie 默认会读取本机各 Agent 已有的登录文件（Claude Code、Codex 的文件、系统钥匙串）来发现订阅。不想让它读：Settings → Privacy → Subscription accounts 关掉，或跑 <code>magpie accounts discovery off</code>（<code>on</code> 恢复），单次运行不想读就加环境变量 <code>MAGPIE_NO_ACCOUNTS=1</code>。只用 API key 的供应商不受这个开关影响。</div>
+
+<h2>6. 给 Agent 选模型</h2>
+<p>Agents 页每行一个本机已装或已配置的 Agent。Magpie 支持 50 多个，常见的有：Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、Pi、Goose、Cursor CLI、Zed、VS Code Chat、JetBrains、Copilot CLI、Crush、Cline、Qwen Code、Kimi Code、MiniMax Code、Grok、Devin、Antigravity CLI、Muse Code 等；只显示你机器上装了的。</p>
+<p>点某个 Agent 的模型打开选择器：先是该 Agent 自己的模型，然后是你的路由组，再是每个供应商的模型；可以打字过滤，也可以直接输入一个列表里没有的模型 id。Codex 的 effort、Pi 的 thinking 这类推理强度在列表下方有滑杆。Claude Code 经 Magpie 还可以给 opus、sonnet、haiku 三档各配不同的模型，默认跟随主模型。</p>
+<p>选完后 Magpie 把它写进该 Agent 自己的配置文件，只改需要的那几项，注释、顺序、缩进都保留，写入是原子的。例如：</p>
+<table>
+<tr><th>Agent</th><th>Magpie 写什么</th></tr>
+<tr><td>Claude Code</td><td><code>~/.claude/settings.json</code> 的 env 块：<code>ANTHROPIC_BASE_URL</code>、<code>ANTHROPIC_AUTH_TOKEN</code> 和模型变量</td></tr>
+<tr><td>Codex</td><td><code>~/.codex/config.toml</code> 里一个 <code>[model_providers.magpie]</code> 表和模型，列表在 <code>magpie-models.json</code>；你的 ChatGPT 登录原样不动</td></tr>
+<tr><td>OpenCode、MiMo Code、DevEco Code、Pi、Crush</td><td>一个 <code>magpie</code> provider 条目，模型写作 <code>magpie/供应商/模型</code></td></tr>
+<tr><td>Gemini CLI</td><td><code>GOOGLE_GEMINI_BASE_URL</code> 指向网关、API key 认证、模型</td></tr>
+</table>
+<p><b>生效规则：</b>Agent 启动时才读配置，所以改完要开新会话；Codex 还要在切换后重启 Codex 应用再开会话。Paseo、编辑器插件这类替你跑 Claude Code / Codex 的前端，读的是同一份配置，同样从下一个会话起生效。</p>
+<p><b>恢复默认：</b>在选择器里选回该 Agent 自己的模型，或跑 <code>magpie &lt;agent&gt; default</code>。Magpie 会删掉它写的东西，并恢复它替换掉的旧值（比如你原来填过的 <code>ANTHROPIC_BASE_URL</code>）。手动改 Agent 配置也不会搞坏什么：Magpie 每次都重新读文件，只碰它自己设的那几个 key。</p>
+<p>命令行同样可以全套操作：</p>
+<pre><code>magpie provider add deepseek sk-…      # 预设厂商只要 key
+magpie provider add moonshot sk-…
+magpie provider add ollama             # 本机服务不用 key
+magpie claude deepseek/deepseek-v4-pro # Claude Code 跑 DeepSeek
+magpie codex moonshot/kimi-k2.5        # Codex 跑 Kimi
+magpie gemini zhipu/glm-5.3            # Gemini CLI 跑 GLM
+magpie opencode claude/claude-sonnet-5 # 你的 Claude 订阅，在 OpenCode 里用
+magpie ls                              # 每个 Agent 和它的模型
+magpie claude default                  # 恢复 Claude Code 原生配置</code></pre>
+
+<h2>7. 手动接入网关</h2>
+<p>Magpie 列表里的 Agent 不用你填环境变量，它直接改配置。其他任何能填 base URL 的工具，把地址指向网关就行：</p>
+<pre><code>export OPENAI_BASE_URL=http://127.0.0.1:3425/v1
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3425
+export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:3425</code></pre>
+<p>API key 填网关密钥：本机默认就是 <code>magpie</code>；也可以在共享设置里给每个客户端发带额度上限的命名密钥（见第 12 节）。Gateway 页的 Connect 区有现成的复制按钮和片段。</p>
+<p>网关的协议翻译是双向的：Agent 发 OpenAI 格式，供应商只认 Anthropic 格式，中间层会转过去再把回复转回来，流式输出和工具调用都在翻译范围内。某个供应商的模型在某个 Agent 里表现异常时，先看 Routing 页那次请求的实际走向，再判断是翻译问题还是模型本身的问题。</p>
+
+<h2>8. 路由组</h2>
+<p>路由组是几个模型或账号合成一个名字 <code>group/&lt;id&gt;</code>，Agent 选它就等于选了一组。额度用完、限流、宕机时自动切下一个，Agent 看不到报错。对话会尽量留在回答过它的那个账号上，这样供应商的提示词缓存不会丢。</p>
+<h3>8.1 路由策略</h3>
+<table>
+<tr><th>策略</th><th>先用什么</th></tr>
+<tr><td>Smart（默认）</td><td>在还有额度的订阅里，选离续费最近的那个，少浪费每个周期末尾剩下的额度</td></tr>
+<tr><td>In order</td><td>按顺序，第一个能回答的先用，不行再下一个</td></tr>
+<tr><td>In turn</td><td>每个对话轮次换下一个成员，分散负载</td></tr>
+<tr><td>Least used</td><td>剩得最多的账号或 key 先用</td></tr>
+<tr><td>Weekly pace</td><td>按“每周剩余额度 ÷ 离续费还有几小时”配速，剩得最经不起耗的先用；用到 90% 以上的先歇着</td></tr>
+<tr><td>By weight</td><td>按权重分请求，权重 3 的拿 3/4，权重 1 的拿 1/4，分散而不是扎堆</td></tr>
+</table>
+<p>一个对话跟一个账号跟多久（Stays）：Auto（默认，一轮之内一定，跨轮看缓存值不值得保留）、Session（整个会话跟到底）、Within a turn（只在工具往返那一轮内）、Off（每次请求重新路由）、Strict（绝不换账号，限流了就把报错原样给 Agent）。</p>
+<h3>8.2 自动组</h3>
+<p>同一个模型在两个供应商都有（比如 Claude Opus 既在 Claude 订阅里，又在 Copilot 里；DeepSeek 既有官方 API 又在 OpenRouter 上），Magpie 会自动合成一个组 <code>auto/&lt;模型&gt;</code>（如 <code>auto/claude-opus-4.6</code>），名字按各家写法归一匹配。Agent 选它就等于把请求摊到所有提供这个模型的供应商上。不想要的组用 <code>magpie group rm</code> 藏起来。</p>
+<h3>8.3 组中组</h3>
+<p>组的成员里可以再放一个组（在 Add a model 里选 Routing groups，或 <code>models+=group/&lt;id&gt;</code>）。外层按自己的策略把内层当一个成员看，落到内层后再按内层的策略和规则走；内层全挂了，外层的下一个成员接手。组不能套自己（直接或间接都不行），最多 8 层；一个组被别的组包含时不能直接删，先从引用处拿掉。</p>
+<h3>8.4 规则：按轮次分流</h3>
+<p>组的 Rules 可以把一轮对话按条件送到指定模型：长对话（token ≥ N）、带图、要推理（开，或者至少某一级）、来自某些 Agent、符合某个意图（intent，如“写测试”“问个小问题”）、Agent 在压缩上下文（compact）、在某些文件夹里、某些时段。所有条件要同时满足才命中；按从上到下的顺序，第一个命中的把它的模型放最前，其他成员还在后面做后备。</p>
+<ul>
+<li>规则在轮次开始时判定，这一轮工具往返期间不换模型；例外是轮次长到超出当前模型的上下文，那就换到装得下的成员。</li>
+<li>意图分类用你选的一个小而快的模型（不要带推理的），只把用户那句话发过去，不发整个对话；默认 8 秒超时（Settings → Models → Replies → Intent classifier timeout），失败或超时就按其他规则走。</li>
+<li>子 Agent 是独立的对话，可以单独分流，母 Agent 不受影响。</li>
+<li>规则还可以给模型定推理强度（Set its reasoning），意图和强度成对出现；也可以在某个时段把某个模型暂停（Pause the model），暂停期间它既不当首选也不当后备，到点自动恢复。</li>
+</ul>
+<p>Routing 页实时显示每个请求是谁回答的、为什么（包括每条规则和分类器的判定），是排查“为什么这次走了这个模型”的第一现场。</p>
+<pre><code>magpie groups                        # 你的组，和 Magpie 找到的组
+magpie group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=smart
+magpie group set opus-anywhere models+=openrouter/anthropic/claude-opus-5.5
+magpie group set opus-anywhere routing=weight weight=claude/claude-opus-5-5=3
+magpie group rule add opus-anywhere use=openrouter/anthropic/claude-opus-5.5 tokens=150k
+magpie group rule add opus-anywhere use=copilot/claude-opus-5.5 intent="a quick question" classifier=groq/llama-3.1-8b-instant
+magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact
+magpie group rule add opus-anywhere use=kimi/kimi-k2.6 folders=~/oss,"~/My Project"
+magpie group rule add opus-anywhere pause=copilot/claude-opus-5.5 time=14:00-18:00 days=mon-fri
+magpie group rule opus-anywhere      # 看它的规则；rule rm|mv &lt;n&gt; 删 / 移
+magpie group copy opus-anywhere "Opus test"
+magpie group rm opus-anywhere        # 藏起一个组；group restore &lt;id&gt; 恢复
+magpie claude group/opus-anywhere    # 给 Claude Code 用这个组</code></pre>
+
+<h2>9. 隐私脱敏</h2>
+<p>Agent 会把读到的东西放进提示词：一个 <code>.env</code>、一份配置、一段带 token 的日志。脱敏开着时，Magpie 在请求离开电脑前，把这些值换成占位符再发出去，回复里再换回来。Agent 和你的文件里始终是真值，厂商看不到。</p>
+<ul>
+<li><b>怎么找：</b>两种方式。规则管确定的：API key、私钥、token、邮箱，以及校验位对得上的银行卡号和证件号；再加一个在本机跑的模型（约 1.6 GB 下载，走 CPU），找规则找不到的人名、地址和密码。</li>
+<li><b>处处换回：</b>值变成 <code>{{API_KEY_k3v9x2mq}}</code> 这样的占位符，回复里的占位符都换回原值，流式文本和工具调用参数也算，所以 Agent 执行的命令里是真的 key。</li>
+<li><b>什么都不坏：</b>同一个值每次的占位符都一样，对话上下文、提示词缓存和 thinking 签名都不受影响；一个值遮过一次，之后出现在哪里都遮。</li>
+<li><b>从不落盘：</b>原值只在内存里，记录只留类型、长度和开头几个字符。脱敏开着却跑不起来时，请求会被拦下（503），绝不按原样发出。</li>
+<li><b>不是黑箱：</b>Insights › Masking 列出它改过的每个请求，厂商实际收到了什么，左右对照；Settings 里有 Try it，可以先看一段文字会被改成什么样。</li>
+<li><b>你说了算：</b>秘密和个人数据各开各的开关，还能细分（护照、IBAN、MAC、公网 IP……）、加自己的词和正则；每个发现可以选 Mask（遮）、Warn（只提醒）、Block（拦截）。</li>
+</ul>
+<p>代价要知道：模型只看到占位符，看不到值本身，所以“这个 token 为什么被拒绝”这类针对值本身的任务做不了——把这种值加进“从不脱敏”。规则偶尔也会认错人，在 Masking 页能看到。开关在 Settings → Privacy。</p>
+
+<h2>10. 插件与中间件</h2>
+<p>Magpie 可以装插件：OpenCode 的 npm 插件、pi 的包，都一样装法。插件跑在 Bun 上，第一次需要时才下载。插件自己走登录流程、列出模型、发出每次请求，Agent 用它的模型就像用其他供应商的模型一样。</p>
+<pre><code>magpie plugin add opencode-gemini-auth   # OpenCode 插件，来自 npm
+magpie plugin add pi-antigravity         # pi 的包，同样装法
+magpie plugin login google-plugin        # 插件自己的登录流程，在 Magpie 里走完</code></pre>
+<p>可以在 magpie-community/plugins 里浏览，或者自己写一个。插件还能做网关中间件：一段 JavaScript，看到每个 Agent 发出的和收到的东西：<code>onRequest</code> 可以改写请求或直接拒绝，<code>onEvent</code> 看每个流式事件，<code>onResponse</code> 看完整回复。钩子抛错或跑太久，请求按原样放行，不会被卡住。</p>
+<table>
+<tr><th>现成中间件</th><th>干什么</th></tr>
+<tr><td>param-override</td><td>按条件设置、删除、移动、改写请求字段，或拒绝请求（New API 的 param_override 同款 JSON）</td></tr>
+<tr><td>model-map</td><td>把一个模型名映射到另一个模型发出去，回复仍用你问的名字</td></tr>
+<tr><td>system-prompt</td><td>给每个请求（或某些 Agent、某些模型）统一加 system prompt</td></tr>
+<tr><td>word-guard</td><td>敏感词过滤：发出去的和回复里的词，拒绝或遮掉</td></tr>
+<tr><td>think-tags</td><td>把回复里的 <code>&lt;think&gt;…&lt;/think&gt;</code> 拿掉，或把 reasoning_content 塞进去</td></tr>
+</table>
+<pre><code>magpie plugin add @magpie-community/middleware-model-map
+magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}'</code></pre>
+<p>中间件在 Plugins › Discover › Gateway middleware 里找。</p>
+
+<h2>11. 用量、成本与上下文</h2>
+<p>Usage 页统计经网关的每次调用：按 Agent、按模型，Today、7 天、30 天、All 四档；token、缓存命中、成本（按官方价，美元或人民币显示，也可以给某个模型自己定价）；各订阅已用额度、什么时候重置，显示在最上面。<code>magpie quota</code> 在终端里看每家剩下的额度，还能在窗口快续费、剩很多没用时提醒你。注意：Agent 绕开 Magpie 直接找自己厂商的调用不经过网关，不计入。</p>
+<p>Usage 的 Context 页显示每个 Agent 的提示词里都有些什么（经网关时读到的）：system prompt、工具定义（某个 MCP 服务器的算一个）、指令文件和技能、工具读过的文件、其他输出、对话本身，按它们在模型上下文窗口里的占比排。每个 Agent 有个满分 100 的分（缓存命中多少、起手多精简、涨得多快、失败频率），还带 Lean start、MCP-heavy 这类标签。点开一次会话能看到它最近一次请求的窗口，逐格看 Magpie 发出去的原文（脱敏开着时是遮过的）。这段原文只保留最近 10 次请求，且只在 Magpie 运行时存在内存里；存下来的只有名字，从没有提示词正文，也不会发到任何地方。</p>
+<p>Profiles 在 Agents 页底部：＋ Save current 把当前所有 Agent 的设置存成一个名字，点 chip 一键切回去；正在用的 Profile 会打勾；托盘面板的 Profiles 按钮也显示它的名字；之后手动改了某项设置，勾就清掉。</p>
+
+<h2>12. 共享与多机</h2>
+<ul>
+<li><b>局域网共享：</b>打开 Share on local network，给每个客户端发一个命名网关密钥，每个密钥可以设每天、每周、每月 token 上限和成本上限。</li>
+<li><b>远程 Magpie：</b>笔记本可以用台式机那个 Magpie 的供应商、账号和组，同时还接自己的 Agent。</li>
+<li><b>Docker：</b>在服务器或 NAS 上跑 <code>ghcr.io/yetone/magpie</code>，用浏览器 UI 管理。</li>
+<li><b>同步：</b>备份到文件，或者经 WebDAV（坚果云、Nextcloud……）、S3、加密 GitHub 仓库备份，在多台机器间同步。</li>
+</ul>
+
+<h2>13. 常见问题</h2>
+<h3>13.1 Agent 报 502 或连不上，Routing 页里什么都没有</h3>
+<p>大概率是代理软件（Surge、Clash、mihomo 等，开了系统代理、TUN 或增强模式）把 Agent 发往 <code>http://127.0.0.1:3425</code> 的请求劫走了，根本没到 Magpie。只加 bypass / skip-proxy 有时不够：有些 Agent（Codex 就在其中）还是会走代理。办法是加规则，让本地地址直连，并且排在其他规则前面。Surge：</p>
+<pre><code>IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+IP-CIDR6,::1/128,DIRECT,no-resolve</code></pre>
+<p>Clash / mihomo 里同样的规则写在 <code>rules:</code> 下面，每行前面加 <code>- </code>。加完给 Agent 发一条新请求。</p>
+<h3>13.2 换了模型，Agent 还在用旧的</h3>
+<p>跑着的会话保持它启动时的模型。开新会话；Codex 还要重启 Codex 应用。</p>
+<h3>13.3 怎么恢复原样</h3>
+<p>在选择器里选回该 Agent 自己的模型，或跑 <code>magpie &lt;agent&gt; default</code>。Magpie 会删掉它写的东西，并恢复它替换掉的旧值。</p>
+<h3>13.4 手动改 Agent 配置会搞坏吗</h3>
+<p>不会。Magpie 每次都重新读文件，只碰它自己设的那几个 key，其他设置和注释都保留。</p>
+<h3>13.5 Magpie 必须一直开着吗</h3>
+<p>走 Magpie 的模型，是。关窗口后它还在菜单栏 / 托盘里跑；也可以装成 daemon 服务。Agent 用自己的模型和登录时不走 Magpie。</p>
+<h3>13.6 Magpie 会把什么发给自己</h3>
+<p>提示词、回复、key、账号只发给你用的供应商。每天有一次计数上报：本机随机生成的一个 id、Magpie 版本、系统、以及按 Magpie 自己的 id 统计的 Agent、供应商、模型用量（自己加的供应商和模型只记为 custom）；不含名字、地址、账号、key、提示词、用量。关法：Settings → Privacy → Share the agents, providers and models I use（去掉 Agent、供应商、模型三项和合作方计数），或 Count me as a user、<code>DO_NOT_TRACK=1</code>、<code>MAGPIE_NO_STATS=1</code> 全关；从源码构建的版本永远不发。Privacy 页列出了 Magpie 自己会发的所有东西，附带每日计数的示例、它保存的文件和每个开关。</p>
+
+<h2>14. 常用命令速查</h2>
+<table>
+<tr><th>命令</th><th>干什么</th></tr>
+<tr><td><code>magpie ls</code></td><td>找到的每个 Agent 和它的设置</td></tr>
+<tr><td><code>magpie presets</code></td><td>Magpie 认识的厂商</td></tr>
+<tr><td><code>magpie provider add &lt;厂商&gt; &lt;key&gt;</code></td><td>加一个预设厂商</td></tr>
+<tr><td><code>magpie accounts add codex</code></td><td>再登录一个 Claude 或 ChatGPT 订阅</td></tr>
+<tr><td><code>magpie accounts discovery off / on</code></td><td>不读 / 恢复读 Agent 的登录文件</td></tr>
+<tr><td><code>magpie providers</code></td><td>你的供应商：地址、key、模型、谁在用</td></tr>
+<tr><td><code>magpie models</code></td><td>Agent 能选的所有模型（<code>供应商/模型</code>）</td></tr>
+<tr><td><code>magpie &lt;agent&gt; &lt;模型&gt;</code></td><td>给某个 Agent 定模型，如 <code>magpie claude codex/gpt-5.5</code></td></tr>
+<tr><td><code>magpie codex effort high</code></td><td>改某个 Agent 的其他字段（如推理强度）</td></tr>
+<tr><td><code>magpie &lt;agent&gt; default</code></td><td>恢复该 Agent 原生配置</td></tr>
+<tr><td><code>magpie save work</code> / <code>magpie use work</code></td><td>保存 / 应用一个 Profile</td></tr>
+<tr><td><code>magpie usage 7d</code></td><td>7 天的 token 与成本（按 Agent、按模型）</td></tr>
+<tr><td><code>magpie quota</code></td><td>每家计划剩下的额度</td></tr>
+<tr><td><code>magpie groups</code> / <code>group add / set / rule</code></td><td>路由组管理（见第 8 节）</td></tr>
+<tr><td><code>magpie tui</code></td><td>终端里的完整应用</td></tr>
+<tr><td><code>magpie tray</code></td><td>只启动菜单栏图标</td></tr>
+<tr><td><code>magpie serve</code></td><td>只跑网关</td></tr>
+<tr><td><code>magpie daemon install / status</code></td><td>装成开机服务 / 看服务状态与页面链接</td></tr>
+<tr><td><code>magpie update</code></td><td>更新（可加 <code>--proxy</code> / <code>mirror</code>）</td></tr>
+<tr><td><code>magpie help</code></td><td>列出所有命令</td></tr>
+</table>
+
+<h2>官方链接</h2>
+<ul>
+<li>官网：<a href="https://usemagpie.ai/">usemagpie.ai</a></li>
+<li>上手文档：<a href="https://usemagpie.ai/docs/start">usemagpie.ai/docs/start</a>（有简体中文版）</li>
+<li>仓库：<a href="https://github.com/yetone/magpie">github.com/yetone/magpie</a></li>
+<li>插件市场：magpie-community/plugins</li>
+</ul>
+<p class="small">本文根据 Magpie 官方上手文档、官网与仓库 README 整理，命令与界面以你装的版本为准；遇到本文没写的情况，先看 Routing 页那次请求的实际走向，再去 Discord 问。</p>
+</body>
+</html>
