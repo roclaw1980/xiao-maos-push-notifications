@@ -47,6 +47,7 @@ li { margin-bottom: 8px; }
 <tr><td><strong>BS-RoFormer</strong></td><td>人声分离：从整首歌里剥出干净人声干声。RVC 的最佳拍档，干声质量直接决定转换效果。</td><td>权重以发布页声明为准，商用前核对</td></tr>
 </table>
 <p><strong>诚实边界：</strong>RVC 学不会唱腔风格、个人咬字、转音特点。要连风格一起克隆得走歌声合成（SVS，如 DiffSinger），需要大量带音高标注的数据，2026 年开源圈没有现成易用的方案。</p>
+<div class="note"><strong>补充（2026-10-26）：BS-RoFormer 的“最强”说法需加限定。</strong>阿力实测分离效果不好。论文榜单上 Mel-Band RoFormer 的人声 SDR 高于 BS-RoFormer，但不同 checkpoint、不同歌曲差异很大（MSST 榜单上 BS-RoFormer 人声 SDR 12.33 反而高于 Mel-Band RoFormer 的 11.30），榜单成绩不等于在你这首歌上的效果。不要凭单模型、单 checkpoint、单首歌下结论，替代方案见第十一节。</div>
 
 <h2>三、配置要求</h2>
 <h3>RVC 2.3</h3>
@@ -186,6 +187,17 @@ vocals, instrumental = sep.separate("song.mp3")  # 返回 (人声, 伴奏) 文�
 <li>产物 <code>.pth</code> + <code>.index</code> 挂回推理服务，前端页填模型名即可用。</li>
 <li>另：是否下载孙燕姿模型；是否重部署推理服务、恢复 rvc.html。</li>
 </ol>
+
+<h2>十一、BS-RoFormer 替代方案（2026-10-26 补充）</h2>
+<p>按验证成本从低到高排：</p>
+<ol>
+<li><strong>Mel-Band RoFormer（同门换 checkpoint，成本最低）。</strong>把 BS-RoFormer 的频带切分换成 mel 尺度重叠频带，论文人声 SDR 高于 BS-RoFormer，声音更平滑、响度更一致。UVR 里有现成模型，同一首歌直接对比听。</li>
+<li><strong>Demucs htdemucs_ft（开源标杆）。</strong>Meta 的混合 Transformer Demucs，微调版质量再进一步，<code>pip install demucs</code> 就能跑，5090 上飞快，适合做对照组。</li>
+<li><strong>UVR5（免费桌面应用，不想折腾代码的首选）。</strong>把 Demucs、MDX-Net、RoFormer、MDX23C 全包了，还能调后处理、降噪、去混响；Windows 电脑就能跑，CPU 也行就是慢。</li>
+<li><strong>多模型 ensemble（效果天花板）。</strong>MVSEP 的做法：BS RoFormer + Mel-Band RoFormer + SCNet XL 三模型结果平均，2025.06 版 ensemble 人声 SDR 11.93，是目前公开榜单最高的打法。代价是 3 倍算力 + 拼接工作量，适合某一首特别重要的歌。</li>
+<li><strong>在线付费参照（验证用）。</strong>LALAL.AI、Moises、StemSplit（后者用 Demucs 同款，按分钟约 $0.10/分钟）——拿一首歌做参照，验证到底是模型问题还是这首歌本身难分。</li>
+</ol>
+<p>验证方法：同一首歌的副歌段，2–3 首不同风格对照；验收标准按 RVC 的需求来——不是伴奏好不好听，而是人声干声里漏了多少伴奏、有没有“水声”/金属 artifacts、高音和气声保没保住。</p>
 
 <p class="muted">说明：本文档只整理部署与训练线的技术内容与状态，不含任何密码、密钥与登录凭证。Gradio 公网地址随 Kaggle 会话生灭，文中历史地址均已失效，仅作记录。</p>
 
