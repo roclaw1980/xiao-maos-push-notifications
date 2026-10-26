@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RVC 歌声克隆模型部署文档</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; color: #222; line-height: 1.85; font-size: 19px; background: #fafaf8; }
+h1 { font-size: 30px; line-height: 1.4; border-bottom: 4px solid #FF6B35; padding-bottom: 12px; }
+h2 { font-size: 24px; margin-top: 44px; border-left: 6px solid #FF6B35; padding-left: 12px; }
+h3 { font-size: 21px; margin-top: 28px; }
+p, li { font-size: 19px; }
+code { background: #eee; padding: 2px 7px; border-radius: 4px; font-size: 17px; word-break: break-all; }
+pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 16px; line-height: 1.6; }
+pre code { background: none; padding: 0; color: inherit; }
+table { border-collapse: collapse; width: 100%; font-size: 18px; margin: 12px 0; }
+th, td { border: 1px solid #ccc; padding: 9px 10px; text-align: left; vertical-align: top; }
+th { background: #f0ede8; }
+.note { background: #fff3ec; border: 1px solid #FF6B35; border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+.muted { color: #666; font-size: 17px; }
+ul { padding-left: 24px; }
+li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>RVC 歌声克隆模型部署文档</h1>
+<p class="muted">整理于 2026-10-26，覆盖 2026-10-14 至 2026-10-17 的部署与训练线。给 AI 歌手人声训练项目留档，下次动手不用从头翻聊天记录。</p>
+
+<h2>一、这是什么，现在什么状态</h2>
+<p>目标：把歌声换成指定音色。两个模型分工：<strong>BS-RoFormer</strong> 先从整首歌里剥出干净人声干声，<strong>RVC 2.3</strong> 再把干声换成目标音色，最后混音。核心用法是把女声唱的歌转成用户自己的声音唱出来。</p>
+<div class="note">
+<strong>当前状态（截至 2026-10-26）：</strong>
+<ul>
+<li><strong>Kaggle 推理部署：挂起。</strong>2026-10-14 曾成功上线，后随会话回收失效；2026-10-15 两轮重部署均未通过端到端验证；同日用户叫停，部署线“先放一放”。</li>
+<li><strong>Kaggle 训练线：已取消。</strong>2026-10-17 配额重置后的“最后机会”尝试失败（Hubert 特征提取静默失败，0 个 epoch），按用户指令彻底取消。</li>
+<li><strong>备选路线已就绪：AutoDL RTX 5090。</strong>修复版训练 notebook 已备好，等用户在 5090 上开机后，先用 1 分钟音频做冒烟测试，再跑正式训练。</li>
+<li><strong>用户自己的清唱录音：尚未录。</strong>倾向只录清唱，20–30 分钟为佳，1 小时封顶。</li>
+<li><strong>三人声音（caiqin → taozhe → danny）：</strong>训练顺序已定，Kaggle 线取消后状态仍为 pending，caiqin 记 1 次失败。</li>
+</ul>
+</div>
+
+<h2>二、两个模型是干什么的</h2>
+<table>
+<tr><th>模型</th><th>作用</th><th>协议</th></tr>
+<tr><td><strong>RVC 2.3</strong></td><td>歌声转换：只换音色，不换唱功。音准、节奏、情感、转音咬字全来自源音频。</td><td>MIT（可商用），2026-07 上游重建，支持 Python 3.12</td></tr>
+<tr><td><strong>BS-RoFormer</strong></td><td>人声分离：从整首歌里剥出干净人声干声。RVC 的最佳拍档，干声质量直接决定转换效果。</td><td>权重以发布页声明为准，商用前核对</td></tr>
+</table>
+<p><strong>诚实边界：</strong>RVC 学不会唱腔风格、个人咬字、转音特点。要连风格一起克隆得走歌声合成（SVS，如 DiffSinger），需要大量带音高标注的数据，2026 年开源圈没有现成易用的方案。</p>
+
+<h2>三、配置要求</h2>
+<h3>RVC 2.3</h3>
+<table>
+<tr><th>用途</th><th>GPU</th><th>显存</th><th>内存</th><th>硬盘</th></tr>
+<tr><td>推理（转换）</td><td>N 卡最好，无独显也可用 CPU（慢）</td><td>4GB+ 流畅</td><td>8GB</td><td>2GB（底模 + 音色模型）</td></tr>
+<tr><td>训练（训自己音色）</td><td>N 卡必需</td><td>4GB 下限（batch 调小）/ 6GB 舒服 / 8GB+ 宽裕</td><td>16GB 推荐</td><td>数 GB</td></tr>
+</table>
+<h3>BS-RoFormer</h3>
+<p>不需要 GPU，CPU 可跑（onnxruntime），一首歌几分钟；有 N 卡更快。内存 8GB 足够，模型 100–300MB，Python 3.8+。</p>
+<h3>对照现有设备</h3>
+<ul>
+<li>家里 GTX 1060 5GB：推理没问题，训练够下限但吃力。</li>
+<li>Seetacloud RTX 5090 32GB：推理训练随便跑。</li>
+<li>Kaggle 免费 T4 16GB：容量够用，但会话随时可被回收，不适合长任务。</li>
+</ul>
+
+<h2>四、部署路线 A：Kaggle 免费 T4（推理 API）</h2>
+<h3>Notebook 搭建顺序</h3>
+<ol>
+<li><strong>环境：</strong>克隆 RVC 仓库，装 faiss-cpu、praat-parselmouth、einops、ffmpeg-python、av 等依赖；不要降级 torch（实测 torch 2.11.0+cu128 可用）。</li>
+<li><strong>下载底模：</strong><code>assets/hubert_base/pytorch_model.bin</code>（181MB）、<code>assets/rmvpe/rmvpe.pt</code>（173MB），来源 HuggingFace <code>lj1995/VoiceConversionWebUI</code>。</li>
+<li><strong>torch.load 幂等补丁（必须，torch ≥ 2.6）：</strong>补丁执行两次会无限递归，执行前必须检查 <code>_rvc_patched</code> 标志。</li>
+<li><strong>convert 函数 + Gradio API：</strong>用仓库 <code>infer/modules/vc/modules.py</code> 的 VC 类封装推理，f0 用 rmvpe；接口签名 <code>convert(audio_b64, model_name, f0_up_key=0, index_rate=0.75)</code>；<strong>输入输出都用 <code>gr.Textbox</code> 传 base64 data URL</strong>，不要用 <code>gr.Audio</code> 等文件组件；<code>demo.launch(share=True)</code>，记录 <code>*.gradio.live</code> 公网地址。</li>
+<li><strong>验证：</strong>下载公开测试模型到 <code>assets/weights/</code>、<code>assets/indices/</code>，调 convert 确认返回有效 wav（字节数、采样率、时长）。</li>
+</ol>
+<h3>BS-RoFormer 同 notebook 加装</h3>
+<p><code>pip install audio-separator onnxruntime-gpu</code>；<code>separate(audio_b64)</code> 解码为临时文件 → <code>Separator.load_model("model_bs_roformer_ep_317_sdr_12.9755.ckpt")</code>（懒加载）→ 按文件名含 vocal / instrumental 挑两轨 → 返回人声与伴奏的 base64。Gradio 同 app 挂第二个接口 <code>api_name="separate"</code>，重跑 <code>launch(share=True)</code>（地址会变）。</p>
+<h3>API 调用格式</h3>
+<pre><code>POST https://&lt;xxx&gt;.gradio.live/gradio_api/call/convert
+Body: {"data": [audio_b64_data_url, "model.pth", 0, 0.75]}
+
+GET https://&lt;xxx&gt;.gradio.live/gradio_api/call/convert/&lt;event_id&gt;  (SSE)
+# SSE: event: complete + data: [result_b64, info文本]（Gradio 6.26 实测）</code></pre>
+<h3>实测耗时（2026-10-14，网络正常）</h3>
+<p>pip 装包约 50 秒；底模下载约 15 秒；Gradio 启动约 25 秒；推理 8 秒音频约 0.5 秒（Features 0.13s / F0 0.08s / Synthesis 0.29s）。女声转男声：<code>f0_up_key=-12</code>（降一个八度）。</p>
+<h3>Kaggle 会话生存规律（实测结论）</h3>
+<ul>
+<li>免费 T4 无固定存活时长，Kaggle 可随时回收；高峰期（北京时间晚间 = 美东白天）几分钟就被杀，空闲时（北京时间上午 = 美东深夜）可跑较久。长任务排北京时间上午。</li>
+<li>回收会清空 <code>/kaggle/working</code>（pip 包、下载的模型、运行的服务全没），但 notebook 代码格子保留；每次新会话都要重跑部署（约 3–5 分钟）。</li>
+<li>把模型做成 Kaggle Dataset 挂载，省每次重下几百 MB；训练 checkpoint 每 25–50 epoch 存一次，存成 Dataset 防丢。</li>
+<li>配额 30 小时/周；同时只允许 1 个交互式 GPU 会话——RVC 和分离必须同 notebook。</li>
+<li>浏览器窗口闲置约 2 小时自动关；Kaggle 额度只算会话开着的时间，空挂也烧。</li>
+</ul>
+<div class="note"><strong>历史 Gradio 地址（均已随会话回收失效）：</strong><br>
+10-14 推理引擎：<code>24d13748511c31553a.gradio.live</code><br>
+10-15 重部署：<code>ab9330565aa788d043.gradio.live</code>、<code>2be93306acca0883ee.gradio.live</code><br>
+前端页 <code>docs/rvc.html</code> 目前因后端地址失效而调不通，重部署后需更新地址。</div>
+
+<h2>五、部署路线 B：本地（Windows / Linux）</h2>
+<h3>RVC 2.3 本地</h3>
+<pre><code>git clone https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
+cd Retrieval-based-Voice-Conversion-WebUI
+pip install -r requirements.txt</code></pre>
+<ol>
+<li>下载底模到 <code>assets/</code>：<code>hubert_base</code>（约 181MB）、<code>rmvpe.pt</code>（约 173MB）、<code>f0G32K</code> / <code>f0D32K</code>（来源见仓库 README）。</li>
+<li>音色模型（<code>.pth</code> + <code>.index</code>）放到 <code>assets/weights/</code>。</li>
+<li>启动：<code>python infer-web.py</code>（WebUI），或按 Kaggle 路线自建 Gradio 接口。</li>
+<li>关键：torch ≥ 2.6 时 <code>torch.load</code> 需 <code>weights_only=False</code>，补丁必须幂等（见第七节）。</li>
+</ol>
+<h3>BS-RoFormer 本地</h3>
+<pre><code>pip install audio-separator
+# 有 N 卡再加：pip install onnxruntime-gpu</code></pre>
+<pre><code>from audio_separator.separator import Separator
+sep = Separator(output_format="wav")
+sep.load_model("model_bs_roformer_ep_317_sdr_12.9755.ckpt")  # 权重自动从 HF 下载
+vocals, instrumental = sep.separate("song.mp3")  # 返回 (人声, 伴奏) 文件路径</code></pre>
+<h3>底模与测试模型来源</h3>
+<table>
+<tr><th>文件</th><th>大小</th><th>来源</th></tr>
+<tr><td><code>assets/hubert_base/pytorch_model.bin</code></td><td>181MB</td><td>HuggingFace lj1995/VoiceConversionWebUI</td></tr>
+<tr><td><code>assets/rmvpe/rmvpe.pt</code></td><td>173MB</td><td>同上</td></tr>
+<tr><td><code>f0G32K</code> / <code>f0D32K</code>（生成器 / 判别器）</td><td>—</td><td>见 RVC 仓库 README 指定的下载页</td></tr>
+<tr><td>测试音色 rogue.pth + rogue.index</td><td>55MB + 319MB</td><td>0xra/Rogue-RVC，RVC v2 48kHz，2026-10-14 实测推理正常</td></tr>
+<tr><td>BS-RoFormer 权重 ckpt</td><td>100–300MB（实测下载 639MB）</td><td>audio-separator 默认模型，首次调用自动从 HuggingFace 下载</td></tr>
+</table>
+
+<h2>六、训练流程（训自己音色）</h2>
+<h3>数据准备</h3>
+<ul>
+<li>格式：WAV 单声道 44.1kHz 最好，MP3 也能用但 WAV 更稳。</li>
+<li>内容：清唱 10–20 分钟 + 说话 10–20 分钟最优；只给清唱也行，20–30 分钟为佳，1 小时封顶（超过 1 小时几乎听不出差别、只浪费训练时间）。</li>
+<li>要求：安静干声环境（衣柜等），无混响；全程同一设备同一音量；覆盖高 / 中 / 低音、长音颤音、快慢风格；不要过度降噪。</li>
+<li>原则：干净、多样 &gt; 堆时长。RVC 吃进去什么，吐出来就是什么质感。</li>
+</ul>
+<h3>训练步骤</h3>
+<ol>
+<li><strong>预处理：</strong>音频切段 → 重采样 → RMVPE 提 F0 → Hubert 提特征。T4 上约十几分钟。</li>
+<li><strong>训练：</strong>200 epoch。T4 参考 2–3 小时（社区 claim，误差 ±50%）；50 分钟数据约 3–4 小时；batch_size 默认 8，显存不足调小。</li>
+<li><strong>Checkpoint：</strong>每 25–50 epoch 存一次。Kaggle 上存成 Dataset（防会话回收丢进度）。</li>
+<li><strong>产物：</strong><code>.pth</code>（模型）+ <code>.index</code>（检索索引），放到推理服务的 <code>assets/weights/</code> / <code>assets/indices/</code>，前端页填模型名即可用。</li>
+</ol>
+<p>训练产物就是两个独立文件，可从 Kaggle 下载到本地直接用，或存成 Kaggle Dataset 下次部署挂载免重训。</p>
+
+<h2>七、排障：已知坑与修法</h2>
+<h3>1. torch.load 无限递归（RecursionError）</h3>
+<p>症状：补丁重复执行，递归数千次后 RecursionError。修复：补丁幂等化——执行前检查 <code>getattr(torch.load, "_rvc_patched", False)</code>，用闭包包装且只包一层。注意：torch 2.11 下 rogue.pth 仍可能 RecursionError（版本与该 checkpoint 不兼容），备选是把 torch 降到 2.7.1（该版本曾加载成功）。</p>
+<h3>2. Gradio 6.x 文件组件经 API 变空</h3>
+<p>症状：<code>cannot reshape tensor of 0 elements</code>，服务端收到空张量。原因：<code>gr.Audio</code> / <code>gr.Image</code> / <code>gr.File</code> 经 <code>/gradio_api/call</code> 传入有 bug（gradio_client 2.7.2 同样）。修复：输入输出改 <code>gr.Textbox</code> 传 base64 data URL，函数内直接解码，不经过文件系统。</p>
+<h3>3. onnxruntime-gpu 版本与 CUDA 兼容</h3>
+<p>1.31.0 曾报 libcublasLt 相关错误；降到 <strong>onnxruntime-gpu==1.22.0</strong>（CUDA 12 兼容）后验证有效，BS-RoFormer 分离可跑到 60%（3/5 segments）不再报错。</p>
+<h3>4. 底模必须实际落盘到 assets/</h3>
+<p>10-15 重部署时 hubert_base 下载 cell 未实际落盘（HF 缓存为空），导致 <code>load_hubert</code> 报 IndexError。修法：底模落盘到 <code>assets/</code> 并逐项校验，最好做成 Kaggle Dataset 挂载，省每次重下几百 MB。</p>
+<h3>5. separate 输出文件名匹配要健壮</h3>
+<p>10-15 的 separate 曾因输出文件查找逻辑 bug（<code>sep.separate()</code> 未返回预期含 vocal / instrumental 命名的两个文件，后备逻辑越界）报 IndexError。修法：文件名匹配改健壮，不要假设固定命名。</p>
+<h3>6. Kaggle 会话被回收</h3>
+<p>现象：Gradio 地址 404，notebook 显示会话停止。处理：重建会话，按 cell 顺序重跑（约 3–5 分钟）。预防：长任务排北京时间上午，checkpoint 勤存。</p>
+<h3>7. Hubert 特征提取静默失败（10-17 最后机会失败根因）</h3>
+<p>现象：Cell 报告成功但实际 0 产出（<code>logs/rvc_caiqin/3_feature768/</code> 为空），随后因缺 filelist.txt 导致训练退出，0 个 epoch。5090 修复版已针对性加固：Hubert 底模补齐三件套并逐项校验、去掉所有日志截断、每步加输出断言、训练启动前确认特征目录非空。</p>
+
+<h2>八、项目时间线</h2>
+<ul>
+<li><strong>2026-10-14：</strong>用户拍板用 RVC 2.3，在 Kaggle 上部署歌声克隆。当晚推理引擎部署成功（Gradio 公网地址，测试模型 rogue 验证通过，返回 48kHz、7.98 秒有效 WAV）；前端页 rvc.html 发布（选音频 → 转换 → 试听/下载，变调 -12 转男声）。同晚用户拍板 BS-RoFormer，但部署失败：Kaggle 免费 T4 会话 30 分钟内自发重启 7 次，服务无法存活。当晚新建两个旁聊：AI歌手（唱歌任务）、伴奏分离（分离任务，与 RVC 共用同一 notebook）。</li>
+<li><strong>2026-10-15 凌晨：</strong>RVC 地址 404（会话被回收）。部署 skill 制作完成并打包 RAR 发 Telegram。</li>
+<li><strong>2026-10-15 上午：</strong>用户批准重部署，convert 与 separate 两接口均挂载，但端到端两项失败（torch 递归、separate 加载时退出）。下午四坑修法验证有效（幂等补丁、onnxruntime-gpu 1.22.0、分离跑到 60%），但 hubert 未落盘 + separate 文件名 bug + 会话 21 分钟后再次停止。10:41 用户叫停，部署线整体挂起。</li>
+<li><strong>2026-10-16：</strong>三人训练（caiqin → taozhe → danny）因 Kaggle 配额 28:09/30h 触发 20 小时门禁而跳过。当晚用户澄清：不是立即放弃，配额重置后给最后一次机会，失败再取消，并写入“最后机会”条款。</li>
+<li><strong>2026-10-17：</strong>配额重置后 11:00 场实质尝试，caiqin 训练启动失败（Hubert 特征提取静默失败，filelist 缺失，train.py 未启动，0 个 epoch），按用户指令取消整条 Kaggle 训练线，两个抢跑定时任务双双 disable。同日修好 5090 版 notebook（12 个 cell），约定用户在 5090 上开机后先用 1 分钟音频跑冒烟测试。</li>
+<li><strong>2026-10-17 之后：</strong>训练线搁置；用户自己的清唱仍未录；三人声音训练 pending。</li>
+</ul>
+
+<h2>九、手头资产清单</h2>
+<ul>
+<li><strong>部署 skill：</strong><code>~/workspace/custom-skills/rvc-bsroformer-deploy/</code>（SKILL.md + 4 篇 references：Kaggle 部署、训练、模型来源、排障），已打包 RAR 发 Telegram。</li>
+<li><strong>5090 修复版训练 notebook：</strong><code>~/workspace/rvc-training/rvc-train-5090-fixed.ipynb</code>（12 个 cell，改了三处：Hubert 底模补齐三件套并逐项校验、去掉所有日志截断、每步加输出断言）。本机无 GPU 未端到端验证，等用户点头后再用。</li>
+<li><strong>Kaggle 版训练 notebook：</strong><code>~/workspace/rvc-training/rvc-train-kaggle.ipynb</code>；训练状态 <code>~/workspace/rvc-training/state.json</code>（三人 pending，caiqin attempts=1 附失败备注）。</li>
+<li><strong>前端页：</strong>GitHub Pages <code>docs/rvc.html</code>（测试音色 rogue；后端 Gradio 地址已失效，需重部署后更新）。</li>
+<li><strong>Kaggle 账号：</strong>xfq5ta@gmail.com / Larson5588；最后机会尝试的 notebook：<code>kaggle.com/code/larson5588/notebooka16a95ad83/edit</code>。</li>
+<li><strong>待分离音频：</strong><code>~/workspace/user/files/1_0_7l2t.mp3</code>（18.6 分钟，用户要求部署成功后分离，人声 + 伴奏转 MP3 发 Telegram）—— pending。</li>
+<li><strong>华语歌星模型线索：</strong>B 站 UP 主「森亚露露卡-嘉莱娜影」视频《AI孙燕姿模型共享》简介附夸克网盘公开链接，解压码需 B 站三连后由机器人自动发送；该 UP 主另有张碧晨、王嘉尔、蔡健雅的模型视频——用户未答复是否下载。</li>
+</ul>
+
+<h2>十、下一步（等用户拍板）</h2>
+<ol>
+<li>录清唱：20–30 分钟，只清唱也行，1 小时封顶，干净多样优先。</li>
+<li>在 AutoDL 5090 上开机，先用 1 分钟音频跑冒烟测试，确认特征正常生成。</li>
+<li>正式训练：一个声音约 1–2 小时，无配额、无回收；三人一个下午可训完。</li>
+<li>产物 <code>.pth</code> + <code>.index</code> 挂回推理服务，前端页填模型名即可用。</li>
+<li>另：是否下载孙燕姿模型；是否重部署推理服务、恢复 rvc.html。</li>
+</ol>
+
+<p class="muted">说明：本文档只整理部署与训练线的技术内容与状态，不含任何密码、密钥与登录凭证。Gradio 公网地址随 Kaggle 会话生灭，文中历史地址均已失效，仅作记录。</p>
+
+</body>
+</html>
