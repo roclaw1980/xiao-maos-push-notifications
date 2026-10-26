@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>给自己程序接 Google Drive API：一次授权长期复用</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; color: #222; line-height: 1.85; font-size: 19px; background: #fafaf8; }
+h1 { font-size: 30px; line-height: 1.4; border-bottom: 4px solid #FF6B35; padding-bottom: 12px; }
+h2 { font-size: 24px; margin-top: 44px; border-left: 6px solid #FF6B35; padding-left: 12px; }
+h3 { font-size: 21px; margin-top: 28px; }
+p, li { font-size: 19px; }
+code { background: #eee; padding: 2px 7px; border-radius: 4px; font-size: 17px; word-break: break-all; }
+pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 16px; line-height: 1.6; }
+pre code { background: none; padding: 0; color: inherit; }
+table { border-collapse: collapse; width: 100%; font-size: 18px; margin: 12px 0; }
+th, td { border: 1px solid #ccc; padding: 9px 10px; text-align: left; vertical-align: top; }
+th { background: #f0ede8; }
+.note { background: #fff3ec; border: 1px solid #FF6B35; border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+.warn { background: #fff8e1; border: 1px solid #e6a200; border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+.muted { color: #666; font-size: 17px; }
+ul, ol { padding-left: 24px; }
+li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>给自己程序接 Google Drive API：一次授权长期复用</h1>
+<p class="muted">整理于 2026-10-26。目标：登录一次拿到授权，之后程序自动续期，不用反复登录；授权文件只留自己手里。</p>
+
+<h2>一、原理：登录一次，为什么以后不用再登录</h2>
+<p>谷歌用的是 OAuth 2.0。第一次登录并点同意后，程序拿到两个东西：</p>
+<ul>
+<li><strong>access token（短期，约 1 小时过期）</strong>：真正拿去调 API 的凭证。</li>
+<li><strong>refresh token（长期）</strong>：access token 过期后，程序用它换新的 access token，全程不用你再登录。这就是 offline 模式。</li>
+</ul>
+<p>所以“一次授权长期复用”是标准用法，不是旁门左道。但“永久”要打个折，refresh token 会在以下情况失效：</p>
+<ul>
+<li>超过 6 个月没用过，谷歌会收回。</li>
+<li>项目处在“测试”状态，refresh token 7 天就过期（最常见的坑，见第三节）。</li>
+<li>你在谷歌账号的第三方访问权限页里手动撤销。</li>
+<li>改了权限范围（scope），要删掉旧 token 重新授权。</li>
+</ul>
+
+<h2>二、第一步：建项目、开 API</h2>
+<ol>
+<li>浏览器打开 <a href="https://console.cloud.google.com/">Google Cloud 控制台</a>（要能访问谷歌）。</li>
+<li>新建一个项目，名字随便起，比如 <code>my-drive-tool</code>。</li>
+<li>左侧菜单 → API 和服务 → 库，搜 <code>Google Drive API</code>，点启用。</li>
+</ol>
+
+<h2>三、第二步：配 OAuth 同意屏幕（关键一步别省）</h2>
+<ol>
+<li>API 和服务 → OAuth 同意屏幕，User Type 选“外部”。</li>
+<li>应用名称、支持邮箱、开发者邮箱填你自己的。</li>
+<li><strong>点“发布应用”，设为正式版。</strong>不发布的话项目处在测试状态，refresh token 7 天过期，过几天又要重新登录。</li>
+</ol>
+<div class="note">发布后首次登录可能出现“此应用未经 Google 验证”的提示，点“高级”→“前往应用（不安全）”继续就行。个人自用没问题，这只是因为没走谷歌的正式验证流程，不影响你自己用。</div>
+
+<h2>四、第三步：建 OAuth 客户端</h2>
+<ol>
+<li>API 和服务 → 凭据 → 创建凭据 → OAuth 客户端 ID。</li>
+<li>应用类型选“桌面应用”，创建后下载 JSON 文件，存为 <code>client_secret.json</code>。</li>
+<li>这个文件含 client_id 和 client_secret，保管好，别进代码仓库、别公开。</li>
+</ol>
+
+<h2>五、第四步：跑一次授权，拿到 token.json</h2>
+<p>装库并跑下面这段（Python）：</p>
+<pre><code>pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib</code></pre>
+<pre><code>import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+creds = None
+if os.path.exists("token.json"):
+    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file("client_secret.json", SCOPES)
+        creds = flow.run_local_server(port=0)
+    with open("token.json", "w") as token:
+        token.write(creds.to_json())</code></pre>
+<p>跑起来后浏览器会打开谷歌登录页，登录并点允许，当前目录就生成 <code>token.json</code>，这就是你要的授权文件。上面这段逻辑每次启动都跑一遍：token 有效直接用，过期了自动用 refresh token 换新的并写回，不用你再登录。</p>
+
+<h2>六、第五步：程序里调用 Drive API</h2>
+<h3>列文件</h3>
+<pre><code>from googleapiclient.discovery import build
+service = build("drive", "v3", credentials=creds)
+files = service.files().list(pageSize=10, fields="files(id,name)").execute()
+print(files)</code></pre>
+<h3>上传文件</h3>
+<pre><code>from googleapiclient.http import MediaFileUpload
+media = MediaFileUpload("本地文件路径", resumable=True)
+created = service.files().create(
+    body={"name": "云盘上的文件名"},
+    media_body=media,
+    fields="id",
+).execute()
+print("上传成功，文件 ID:", created["id"])</code></pre>
+<p>更多操作（下载、搜索、建文件夹、移动、复制、删除、分享、改权限）都在同一个 <code>service.files()</code> 下面，方法名和官网 API 文档一一对应。</p>
+
+<h2>七、scope 怎么选</h2>
+<table>
+<tr><th>scope</th><th>权限</th><th>适合</th></tr>
+<tr><td><code>drive.readonly</code></td><td>只读</td><td>只要下载、备份、列目录</td></tr>
+<tr><td><code>drive.file</code></td><td>只操作本程序创建的文件</td><td>程序自己的上传下载，不想碰盘里别的文件</td></tr>
+<tr><td><code>drive</code></td><td>全部文件读写</td><td>要管理整个云盘时用</td></tr>
+</table>
+<p>按需选最小的。改 scope 要删掉 token.json 重新跑一遍第五步。</p>
+
+<h2>八、注意事项</h2>
+<div class="warn"><strong>凭证保管：</strong><code>client_secret.json</code> 和 <code>token.json</code> 都是凭证。token.json 尤其不能给别人——谁拿到它，谁就能操作你的云盘。别进 git、别公开、别发聊天。</div>
+<ul>
+<li><strong>多台设备：</strong>API 不绑定设备，认的是项目加凭证，没有设备数量上限。最干净是每台设备各跑一遍授权；也可以把 token.json 安全地拷过去，但别明文同步。配额是按项目共享的，多台设备并发一起算，要节流。</li>
+<li><strong>程序跑在没浏览器的服务器上：</strong>在有浏览器的电脑上跑一次授权，再把 token.json 安全地拷到服务器（别走公开渠道）。</li>
+<li><strong>失效重跑：</strong>长期不用（6 个月）或手动撤销后 refresh token 失效，重新跑一遍第五步即可。</li>
+<li><strong>撤销：</strong>在谷歌账号的第三方访问权限页里撤销授权，所有用这个凭证的设备就都断了，适合设备丢失或换人时用。</li>
+<li><strong>配额：</strong>默认项目级配额够个人用；大批量操作注意节流，别一下并发几百个请求。</li>
+</ul>
+
+<h2>九、如果你只是要同步文件，不用写程序</h2>
+<p>上面这套是给自己写程序准备的。如果只是要在电脑和云盘之间同步文件，不用走 Cloud 项目，直接用免费开源的 rclone：装好后跑 <code>rclone config</code>，按提示在浏览器里登录同意一次，授权文件存在本机 <code>rclone.conf</code> 里，同样长期有效。</p>
+
+<p class="muted">说明：本文档只整理 Drive API 授权的操作步骤，不含任何密码、密钥与登录凭证。控制台菜单名字可能因版本和语言略有不同，以实际页面为准。</p>
+
+</body>
+</html>
